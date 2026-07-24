@@ -1,0 +1,27 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Zhuoying.App"
+             Name="捉影">
+
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+
+  <TrayIcon.Icons>
+    <TrayIcons>
+      <TrayIcon Icon="/Assets/icon.ico"
+                ToolTipText="捉影 — Ctrl+1 截屏"
+                Clicked="OnTrayCapture">
+        <TrayIcon.Menu>
+          <NativeMenu>
+            <NativeMenuItem Header="截屏" Click="OnTrayCapture" />
+            <NativeMenuItem Header="设置" Click="OnTraySettings" />
+            <NativeMenuItemSeparator />
+            <NativeMenuItem Header="退出" Click="OnTrayExit" />
+          </NativeMenu>
+        </TrayIcon.Menu>
+      </TrayIcon>
+    </TrayIcons>
+  </TrayIcon.Icons>
+
+</Application>
