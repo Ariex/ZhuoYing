@@ -8,22 +8,45 @@ using Avalonia.Media;
 namespace Zhuoying.Capture;
 
 /// <summary>
-/// 选区交互与渲染层：半透明暗化遮罩、选区边框、尺寸提示（物理像素）。
-/// 坐标为窗口 DIP；对外换算物理像素时使用窗口 RenderScaling。
+/// 选区交互与渲染层：半透明暗化遮罩、选区边框、8 手柄调整、选区内拖拽移动、
+/// 尺寸提示（物理像素）。坐标为窗口 DIP；对外换算物理像素时使用窗口 RenderScaling。
 /// </summary>
 public sealed class SelectionLayer : Control
 {
     private static readonly IBrush MaskBrush = new SolidColorBrush(Color.FromArgb(0x77, 0, 0, 0));
     private static readonly Pen BorderPen = new(new SolidColorBrush(Color.FromRgb(0x2D, 0x8C, 0xF0)), 2);
+    private static readonly Pen HandlePen = new(new SolidColorBrush(Color.FromRgb(0x2D, 0x8C, 0xF0)), 1.5);
     private static readonly IBrush LabelBackground = new SolidColorBrush(Color.FromArgb(0xCC, 0x20, 0x20, 0x20));
 
+    private const double HandleSize = 8;      // 手柄边长（DIP）
+    private const double HandleHitRadius = 10; // 手柄命中半径（DIP）
+
+    /// <summary>8 个手柄的锚点系数（x, y ∈ {0, 0.5, 1}），顺序：四角 + 四边中点。</summary>
+    private static readonly (double X, double Y)[] HandleAnchors =
+    [
+        (0, 0), (0.5, 0), (1, 0),
+        (1, 0.5), (1, 1), (0.5, 1),
+        (0, 1), (0, 0.5),
+    ];
+
+    private static readonly StandardCursorType[] HandleCursors =
+    [
+        StandardCursorType.TopLeftCorner, StandardCursorType.TopSide, StandardCursorType.TopRightCorner,
+        StandardCursorType.RightSide, StandardCursorType.BottomRightCorner, StandardCursorType.BottomSide,
+        StandardCursorType.BottomLeftCorner, StandardCursorType.LeftSide,
+    ];
+
+    private enum DragMode { None, Create, Move, Resize }
+
     private Rect _selection;
-    private Rect _preDragSelection;
+    private Rect _dragStartRect;
     private Point _dragStart;
-    private bool _dragging;
+    private DragMode _mode;
+    private int _handleIndex;
+    private StandardCursorType _currentCursor = StandardCursorType.Cross;
 
     public Rect Selection => _selection;
-    public bool IsDragging => _dragging;
+    public bool IsDragging => _mode != DragMode.None;
 
     /// <summary>拖拽开始（用于隐藏工具条）。</summary>
     public event Action? DragStarted;
@@ -42,10 +65,27 @@ public sealed class SelectionLayer : Control
         base.OnPointerPressed(e);
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             return;
-        _dragging = true;
-        _preDragSelection = _selection;
-        _dragStart = Clamp(e.GetPosition(this));
-        _selection = new Rect(_dragStart, _dragStart);
+
+        var pos = Clamp(e.GetPosition(this));
+        _dragStart = pos;
+        _dragStartRect = _selection;
+
+        var handle = HitHandle(pos);
+        if (handle >= 0)
+        {
+            _mode = DragMode.Resize;
+            _handleIndex = handle;
+        }
+        else if (_selection.Contains(pos))
+        {
+            _mode = DragMode.Move;
+        }
+        else
+        {
+            _mode = DragMode.Create;
+            _selection = new Rect(pos, pos);
+        }
+
         DragStarted?.Invoke();
         e.Pointer.Capture(this);
         InvalidateVisual();
@@ -54,27 +94,92 @@ public sealed class SelectionLayer : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (!_dragging)
-            return;
         var pos = Clamp(e.GetPosition(this));
-        _selection = new Rect(
-            Math.Min(_dragStart.X, pos.X), Math.Min(_dragStart.Y, pos.Y),
-            Math.Abs(pos.X - _dragStart.X), Math.Abs(pos.Y - _dragStart.Y));
+
+        switch (_mode)
+        {
+            case DragMode.None:
+                UpdateCursor(pos);
+                return;
+            case DragMode.Create:
+                _selection = new Rect(
+                    Math.Min(_dragStart.X, pos.X), Math.Min(_dragStart.Y, pos.Y),
+                    Math.Abs(pos.X - _dragStart.X), Math.Abs(pos.Y - _dragStart.Y));
+                break;
+            case DragMode.Move:
+                var dx = Math.Clamp(pos.X - _dragStart.X, -_dragStartRect.X, Bounds.Width - _dragStartRect.Right);
+                var dy = Math.Clamp(pos.Y - _dragStart.Y, -_dragStartRect.Y, Bounds.Height - _dragStartRect.Bottom);
+                _selection = new Rect(_dragStartRect.X + dx, _dragStartRect.Y + dy,
+                    _dragStartRect.Width, _dragStartRect.Height);
+                break;
+            case DragMode.Resize:
+                _selection = ResizeByHandle(pos);
+                break;
+        }
         InvalidateVisual();
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (!_dragging || e.InitialPressMouseButton != MouseButton.Left)
+        if (_mode == DragMode.None || e.InitialPressMouseButton != MouseButton.Left)
             return;
-        _dragging = false;
+        var mode = _mode;
+        _mode = DragMode.None;
         e.Pointer.Capture(null);
-        // 位移过小视为误点击，恢复原选区（对应 TOOLS-SPEC "< 3px 丢弃" 的同类规则）
-        if (_selection.Width < 3 || _selection.Height < 3)
-            _selection = _preDragSelection;
+        // 新建时位移过小视为误点击，恢复原选区
+        if (mode == DragMode.Create && (_selection.Width < 3 || _selection.Height < 3))
+            _selection = _dragStartRect;
         InvalidateVisual();
+        UpdateCursor(Clamp(e.GetPosition(this)));
         DragCompleted?.Invoke(_selection);
+    }
+
+    private Rect ResizeByHandle(Point pos)
+    {
+        var (ax, ay) = HandleAnchors[_handleIndex];
+        double left = _dragStartRect.X, top = _dragStartRect.Y;
+        double right = _dragStartRect.Right, bottom = _dragStartRect.Bottom;
+        if (ax == 0) left = pos.X;
+        else if (ax == 1) right = pos.X;
+        if (ay == 0) top = pos.Y;
+        else if (ay == 1) bottom = pos.Y;
+        // 允许拖拽越过对边，自动翻转
+        return new Rect(
+            Math.Min(left, right), Math.Min(top, bottom),
+            Math.Abs(right - left), Math.Abs(bottom - top));
+    }
+
+    /// <returns>命中的手柄下标，未命中返回 -1。</returns>
+    private int HitHandle(Point pos)
+    {
+        if (_selection.Width <= 0 || _selection.Height <= 0)
+            return -1;
+        for (var i = 0; i < HandleAnchors.Length; i++)
+        {
+            var center = HandleCenter(i);
+            if (Math.Abs(pos.X - center.X) <= HandleHitRadius && Math.Abs(pos.Y - center.Y) <= HandleHitRadius)
+                return i;
+        }
+        return -1;
+    }
+
+    private Point HandleCenter(int index)
+    {
+        var (ax, ay) = HandleAnchors[index];
+        return new Point(_selection.X + ax * _selection.Width, _selection.Y + ay * _selection.Height);
+    }
+
+    private void UpdateCursor(Point pos)
+    {
+        var handle = HitHandle(pos);
+        var type = handle >= 0 ? HandleCursors[handle]
+            : _selection.Contains(pos) ? StandardCursorType.SizeAll
+            : StandardCursorType.Cross;
+        if (type == _currentCursor)
+            return;
+        _currentCursor = type;
+        Cursor = new Cursor(type);
     }
 
     private Point Clamp(Point p) => new(
@@ -100,7 +205,22 @@ public sealed class SelectionLayer : Control
             return;
 
         context.DrawRectangle(null, BorderPen, sel);
+        DrawHandles(context);
         DrawSizeLabel(context, sel);
+    }
+
+    private void DrawHandles(DrawingContext context)
+    {
+        // 新建拖拽过程中不画手柄，避免与十字光标视觉冲突
+        if (_mode == DragMode.Create)
+            return;
+        for (var i = 0; i < HandleAnchors.Length; i++)
+        {
+            var center = HandleCenter(i);
+            var rect = new Rect(
+                center.X - HandleSize / 2, center.Y - HandleSize / 2, HandleSize, HandleSize);
+            context.DrawRectangle(Brushes.White, HandlePen, rect, 1.5, 1.5);
+        }
     }
 
     private void DrawSizeLabel(DrawingContext context, Rect sel)
