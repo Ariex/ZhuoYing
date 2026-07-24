@@ -63,8 +63,8 @@ public partial class App : Application
         var icons = TrayIcon.GetIcons(this);
         if (icons is { Count: > 0 })
             icons[0].ToolTipText = HotkeyRegistered
-                ? $"捉影 — {hotkey.Display} 截屏"
-                : $"捉影 — 热键 {hotkey.Display} 被占用，请在设置中改键";
+                ? $"捉影 v{AppVersion.Display} — {hotkey.Display} 截屏"
+                : $"捉影 v{AppVersion.Display} — 热键 {hotkey.Display} 被占用，请在设置中改键";
         return HotkeyRegistered;
     }
 

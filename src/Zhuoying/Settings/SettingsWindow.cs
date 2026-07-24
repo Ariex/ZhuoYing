@@ -30,7 +30,7 @@ public sealed class SettingsWindow : Window
         _tryApply = tryApply;
         _save = save;
 
-        Title = "捉影 — 设置";
+        Title = $"捉影 — 设置  v{AppVersion.Display}";
         Width = 380;
         Height = 230;
         CanResize = false;

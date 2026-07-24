@@ -1,0 +1,32 @@
+<Project>
+
+  <!--
+    版本号单一事实来源。
+    方案（见 docs/TROUBLESHOOTING.md 无关，详见 README「版本号」节）：
+      主.次           = 里程碑，手动维护（0.2=跨屏，…，1.0=需求 v1 全落地）
+      FileVersion     = 主.次.距纪元天数.当日分钟数（自动构建时间戳，
+                        每段受 PE 版本资源 16 位约束，此编码精确到分钟且 179 年不回绕）
+      AssemblyVersion = 主.次.0.0（保持稳定）
+      InformationalVersion（产品版本）= 主.次+完整时间，供 UI 与 exe 属性展示
+    升级里程碑：改这里的 VersionPrefix + git tag。
+  -->
+  <PropertyGroup>
+    <VersionPrefix>0.1</VersionPrefix>
+    <BuildEpoch>2026-01-01</BuildEpoch>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <BuildDays>$([System.DateTime]::Now.Subtract($([System.DateTime]::Parse('$(BuildEpoch)'))).Days)</BuildDays>
+    <BuildMinutesOfDay>$([MSBuild]::Add($([MSBuild]::Multiply($([System.DateTime]::Now.Hour), 60)), $([System.DateTime]::Now.Minute)))</BuildMinutesOfDay>
+
+    <Version>$(VersionPrefix)</Version>
+    <AssemblyVersion>$(VersionPrefix).0.0</AssemblyVersion>
+    <FileVersion>$(VersionPrefix).$(BuildDays).$(BuildMinutesOfDay)</FileVersion>
+    <!-- 时区偏移形如 +0800（去掉 zzz 输出中的冒号），时间为编译机本地时间 -->
+    <BuildUtcOffset>$([System.DateTimeOffset]::Now.ToString('zzz').Replace(':', ''))</BuildUtcOffset>
+    <InformationalVersion>$(VersionPrefix)+$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm'))$(BuildUtcOffset)</InformationalVersion>
+    <!-- 阻止 SDK 向产品版本追加 git 提交哈希（本地构建常含未提交改动，哈希无定位意义） -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+</Project>
