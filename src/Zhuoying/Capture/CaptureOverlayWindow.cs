@@ -99,6 +99,7 @@ public sealed class CaptureOverlayWindow : Window
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(4),
             BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
+            Cursor = new Cursor(StandardCursorType.Arrow), // 覆盖窗口级十字光标
             Child = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
