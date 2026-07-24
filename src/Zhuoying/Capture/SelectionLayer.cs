@@ -36,7 +36,17 @@ public sealed class SelectionLayer : Control
         StandardCursorType.BottomLeftCorner, StandardCursorType.LeftSide,
     ];
 
-    private enum DragMode { None, Create, Move, Resize }
+    private enum DragMode
+    {
+        None,
+        Create,
+        Move,
+        Resize,
+        /// <summary>按在选区外：已预览"角扩展到按下点"，拖拽则转为 Create，直接松开则保留扩展结果。</summary>
+        Expand,
+    }
+
+    private const double DragThreshold = 3;
 
     private Rect _selection;
     private Rect _dragStartRect;
@@ -76,14 +86,27 @@ public sealed class SelectionLayer : Control
             _mode = DragMode.Resize;
             _handleIndex = handle;
         }
+        else if (IsFullBounds(_selection))
+        {
+            // 默认全屏选区：内部按下即开始画新矩形（否则无法重新框选）
+            _mode = DragMode.Create;
+            _selection = new Rect(pos, pos);
+        }
         else if (_selection.Contains(pos))
         {
             _mode = DragMode.Move;
         }
         else
         {
-            _mode = DragMode.Create;
-            _selection = new Rect(pos, pos);
+            // 选区外按下：先预览把最近的角/边扩展到按下点；
+            // 后续拖拽超过阈值则转为画新矩形，直接松开则保留扩展结果。
+            // 注意不能用 Rect.Union——它对零尺寸矩形（单点）有空矩形特判会原样返回
+            _mode = DragMode.Expand;
+            var left = Math.Min(_dragStartRect.X, pos.X);
+            var top = Math.Min(_dragStartRect.Y, pos.Y);
+            var right = Math.Max(_dragStartRect.Right, pos.X);
+            var bottom = Math.Max(_dragStartRect.Bottom, pos.Y);
+            _selection = new Rect(left, top, right - left, bottom - top);
         }
 
         DragStarted?.Invoke();
@@ -115,6 +138,16 @@ public sealed class SelectionLayer : Control
             case DragMode.Resize:
                 _selection = ResizeByHandle(pos);
                 break;
+            case DragMode.Expand:
+                if (Math.Abs(pos.X - _dragStart.X) >= DragThreshold
+                    || Math.Abs(pos.Y - _dragStart.Y) >= DragThreshold)
+                {
+                    _mode = DragMode.Create;
+                    _selection = new Rect(
+                        Math.Min(_dragStart.X, pos.X), Math.Min(_dragStart.Y, pos.Y),
+                        Math.Abs(pos.X - _dragStart.X), Math.Abs(pos.Y - _dragStart.Y));
+                }
+                break;
         }
         InvalidateVisual();
     }
@@ -127,8 +160,9 @@ public sealed class SelectionLayer : Control
         var mode = _mode;
         _mode = DragMode.None;
         e.Pointer.Capture(null);
-        // 新建时位移过小视为误点击，恢复原选区
-        if (mode == DragMode.Create && (_selection.Width < 3 || _selection.Height < 3))
+        // 新建时位移过小视为误点击，恢复原选区（Expand 模式松开则保留扩展结果）
+        if (mode == DragMode.Create
+            && (_selection.Width < DragThreshold || _selection.Height < DragThreshold))
             _selection = _dragStartRect;
         InvalidateVisual();
         UpdateCursor(Clamp(e.GetPosition(this)));
@@ -174,7 +208,7 @@ public sealed class SelectionLayer : Control
     {
         var handle = HitHandle(pos);
         var type = handle >= 0 ? HandleCursors[handle]
-            : _selection.Contains(pos) ? StandardCursorType.SizeAll
+            : _selection.Contains(pos) && !IsFullBounds(_selection) ? StandardCursorType.SizeAll
             : StandardCursorType.Cross;
         if (type == _currentCursor)
             return;
@@ -185,6 +219,11 @@ public sealed class SelectionLayer : Control
     private Point Clamp(Point p) => new(
         Math.Clamp(p.X, 0, Bounds.Width),
         Math.Clamp(p.Y, 0, Bounds.Height));
+
+    /// <summary>选区是否即整个屏幕（容差 0.5 DIP）。</summary>
+    private bool IsFullBounds(Rect rect) =>
+        rect.X <= 0.5 && rect.Y <= 0.5
+        && rect.Right >= Bounds.Width - 0.5 && rect.Bottom >= Bounds.Height - 0.5;
 
     public override void Render(DrawingContext context)
     {
