@@ -18,11 +18,11 @@ public sealed class AnnotationModel
 {
     private readonly Stack<IEditCommand> _undo = new();
     private readonly Stack<IEditCommand> _redo = new();
-    private ShapeElement? _selected;
+    private AnnotationElement? _selected;
 
-    public List<ShapeElement> Elements { get; } = [];
+    public List<AnnotationElement> Elements { get; } = [];
 
-    public ShapeElement? Selected
+    public AnnotationElement? Selected
     {
         get => _selected;
         set
@@ -71,7 +71,7 @@ public sealed class AnnotationModel
     }
 
     /// <summary>命中最上层元素（后创建者优先）。</summary>
-    public ShapeElement? HitTest(PixelPoint p, double slop)
+    public AnnotationElement? HitTest(PixelPoint p, double slop)
     {
         for (var i = Elements.Count - 1; i >= 0; i--)
         {
@@ -83,7 +83,7 @@ public sealed class AnnotationModel
 }
 
 /// <summary>创建元素（构造前元素已加入模型）。</summary>
-public sealed class AddElementCommand(AnnotationModel model, ShapeElement element) : IEditCommand
+public sealed class AddElementCommand(AnnotationModel model, AnnotationElement element) : IEditCommand
 {
     public void Undo()
     {
@@ -96,7 +96,7 @@ public sealed class AddElementCommand(AnnotationModel model, ShapeElement elemen
 }
 
 /// <summary>删除元素（构造前元素已从模型移除）。</summary>
-public sealed class RemoveElementCommand(AnnotationModel model, ShapeElement element, int index) : IEditCommand
+public sealed class RemoveElementCommand(AnnotationModel model, AnnotationElement element, int index) : IEditCommand
 {
     public void Undo() => model.Elements.Insert(Math.Min(index, model.Elements.Count), element);
 
@@ -108,21 +108,11 @@ public sealed class RemoveElementCommand(AnnotationModel model, ShapeElement ele
     }
 }
 
-/// <summary>几何/样式修改（移动、缩放、圆角、任何属性；构造前新值已生效）。</summary>
+/// <summary>几何/样式修改（移动、缩放、控制点、任何属性；构造前新状态已生效）。</summary>
 public sealed class MutateElementCommand(
-    ShapeElement element,
-    PixelRect oldBounds, ShapeStyle oldStyle,
-    PixelRect newBounds, ShapeStyle newStyle) : IEditCommand
+    AnnotationElement element, object before, object after) : IEditCommand
 {
-    public void Undo()
-    {
-        element.Bounds = oldBounds;
-        element.Style = oldStyle;
-    }
+    public void Undo() => element.RestoreState(before);
 
-    public void Redo()
-    {
-        element.Bounds = newBounds;
-        element.Style = newStyle;
-    }
+    public void Redo() => element.RestoreState(after);
 }

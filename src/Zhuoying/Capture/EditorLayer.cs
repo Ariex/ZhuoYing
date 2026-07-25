@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -9,10 +11,9 @@ namespace Zhuoying.Capture;
 
 /// <summary>
 /// 编辑器输入层（最上层，接收全部画布指针输入）+ 选中元素的手柄渲染。
-/// 输入路由优先级：旋转手柄 → 圆角手柄 → 缩放手柄 → 元素本体（选中/移动）→
-/// 选区交互（委托 SelectionController）。形状工具激活时拖拽创建新元素。
-/// 元素可旋转：手柄位置在未旋转坐标系中计算、绕元素中心旋转后命中/绘制；
-/// 拖拽调整时把指针逆旋转回未旋转坐标系再套用原有几何逻辑。
+/// 输入路由优先级：元素手柄（旋转/圆角/缩放/线控制点）→ 元素本体（选中/移动）→
+/// 选区交互（委托 SelectionController）。
+/// 工具：形状/箭头拖拽创建；折线逐次点击加点、双击结束（期间指针不捕获）。
 /// </summary>
 public sealed class EditorLayer : Control
 {
@@ -20,10 +21,14 @@ public sealed class EditorLayer : Control
     {
         None,
         CreateShape,
+        CreateArrow,
+        CreatePolyline,
         MoveElement,
         ResizeElement,
         RadiusElement,
         RotateElement,
+        MoveLinePoint,
+        MoveLine,
         Selection, // 委托给 SelectionController 的选区交互
     }
 
@@ -56,11 +61,13 @@ public sealed class EditorLayer : Control
     private readonly PixelPoint _origin;
 
     private Op _op;
-    private ShapeElement? _liveElement;   // 创建中/编辑中的元素
+    private AnnotationElement? _liveElement;   // 创建中/编辑中的元素
     private PixelPoint _dragStart;
     private PixelRect _dragStartBounds;
-    private ShapeStyle _dragStartStyle = new();
+    private object? _dragBeforeState;
+    private PixelPoint[] _dragStartPoints = [];
     private int _handleIndex;
+    private bool _dragMutated;
     private StandardCursorType _currentCursor = StandardCursorType.Cross;
 
     public EditorLayer(
@@ -73,7 +80,7 @@ public sealed class EditorLayer : Control
         _model.Changed += InvalidateVisual;
         _state.ToolChanged += () =>
         {
-            AbortCreate();
+            CancelInProgress();
             InvalidateVisual();
         };
     }
@@ -103,15 +110,26 @@ public sealed class EditorLayer : Control
         return new Point((physical.X - _origin.X) / s, (physical.Y - _origin.Y) / s);
     }
 
-    /// <summary>Esc：优先取消创建中元素，其次取消选中；都没有则返回 false（由上层关会话）。</summary>
+    private Point ToLocal(PixelPoint physical) => ToLocal(new Point(physical.X, physical.Y));
+
+    /// <summary>取消进行中的创建（形状拖拽/折线逐点）。取消了返回 true。</summary>
+    public bool CancelInProgress()
+    {
+        if (_op is not (Op.CreateShape or Op.CreateArrow or Op.CreatePolyline) || _liveElement == null)
+            return false;
+        _model.Elements.Remove(_liveElement);
+        _liveElement = null;
+        _op = Op.None;
+        _model.RaiseChanged();
+        return true;
+    }
+
+    /// <summary>Esc：优先取消创建中元素，其次退出工具/取消选中；都没有则返回 false（由上层关会话）。</summary>
     public bool HandleEscape()
     {
-        if (_op == Op.CreateShape)
-        {
-            AbortCreate();
+        if (CancelInProgress())
             return true;
-        }
-        if (_state.Tool == EditorTool.Shape)
+        if (_state.Tool != EditorTool.Select)
         {
             _state.Tool = EditorTool.Select;
             return true;
@@ -134,93 +152,153 @@ public sealed class EditorLayer : Control
         _model.Push(new RemoveElementCommand(_model, el, index));
     }
 
-    /// <summary>双击是否落在空白处（用于双击复制的判定）。</summary>
+    /// <summary>双击是否落在空白处（用于双击复制的判定；折线创建中不算空白）。</summary>
     public bool IsBlankAt(PixelPoint physical) =>
         _state.Tool == EditorTool.Select
+        && _op == Op.None
         && _model.HitTest(physical, 4 * Scaling) == null
         && HitElementHandle(physical) < 0
         && HitRadiusHandle(physical) < 0
-        && !HitRotationHandle(physical);
-
-    private void AbortCreate()
-    {
-        if (_op == Op.CreateShape && _liveElement != null)
-        {
-            _model.Elements.Remove(_liveElement);
-            _model.RaiseChanged();
-        }
-        if (_op == Op.CreateShape)
-            _op = Op.None;
-        _liveElement = null;
-    }
+        && !HitRotationHandle(physical)
+        && HitLineVertex(physical) < 0;
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || _op != Op.None)
+        var props = e.GetCurrentPoint(this).Properties;
+        if (!props.IsLeftButtonPressed)
             return;
         var phys = ToPhysical(e);
         var s = Scaling;
 
-        if (_state.Tool == EditorTool.Shape)
+        // 折线创建：后续点击加点/双击结束（指针不捕获，点击间自由移动）
+        if (_op == Op.CreatePolyline && _liveElement is LineElement poly)
         {
-            _liveElement = new ShapeElement
+            if (e.ClickCount >= 2)
             {
-                Bounds = new PixelRect(phys, new PixelSize(0, 0)),
-                // 新元素继承当前样式，但旋转角归零
-                Style = _state.CurrentStyle with { RotationDeg = 0 },
-            };
-            _model.Elements.Add(_liveElement);
-            _op = Op.CreateShape;
-            _dragStart = phys;
-            _model.RaiseChanged();
-        }
-        else // Select 工具
-        {
-            if (_model.Selected is { } sel && HitRotationHandle(phys))
-            {
-                _op = Op.RotateElement;
-                _liveElement = sel;
-                _dragStartBounds = sel.Bounds;
-                _dragStartStyle = sel.Style;
-            }
-            else if (_model.Selected is { } selR && HitRadiusHandle(phys) is var radius && radius >= 0)
-            {
-                _op = Op.RadiusElement;
-                _handleIndex = radius;
-                _liveElement = selR;
-                _dragStartBounds = selR.Bounds;
-                _dragStartStyle = selR.Style;
-            }
-            else if (_model.Selected is { } selH && HitElementHandle(phys) is var handle && handle >= 0)
-            {
-                _op = Op.ResizeElement;
-                _handleIndex = handle;
-                _liveElement = selH;
-                _dragStartBounds = selH.Bounds;
-                _dragStartStyle = selH.Style;
-            }
-            else if (_model.HitTest(phys, 4 * s) is { } hit)
-            {
-                _model.Selected = hit;
-                _state.SyncStyleFromSelection();
-                _op = Op.MoveElement;
-                _liveElement = hit;
-                _dragStart = phys;
-                _dragStartBounds = hit.Bounds;
-                _dragStartStyle = hit.Style;
+                FinishPolyline(poly);
             }
             else
             {
-                if (_model.Selected != null)
-                    _model.Selected = null;
-                _op = Op.Selection;
-                _selection.PointerPressed(phys, s);
+                poly.Points[^1] = phys;      // 固化预览点
+                poly.Points.Add(phys);       // 新预览点
+                _model.RaiseChanged();
             }
+            e.Handled = true;
+            return;
         }
 
-        e.Pointer.Capture(this);
+        if (_op != Op.None)
+            return;
+
+        switch (_state.Tool)
+        {
+            case EditorTool.Shape:
+            {
+                var el = new ShapeElement
+                {
+                    Bounds = new PixelRect(phys, new PixelSize(0, 0)),
+                    // 新元素继承当前样式，但旋转角归零
+                    Style = _state.CurrentStyle with { RotationDeg = 0 },
+                };
+                _model.Elements.Add(el);
+                _liveElement = el;
+                _op = Op.CreateShape;
+                _dragStart = phys;
+                _model.RaiseChanged();
+                e.Pointer.Capture(this);
+                break;
+            }
+            case EditorTool.Arrow:
+            {
+                var el = new LineElement
+                {
+                    Style = _state.LineStyleFor(EditorTool.Arrow),
+                    IsArrowTool = true,
+                };
+                el.Points.Add(phys);
+                el.Points.Add(phys);
+                _model.Elements.Add(el);
+                _liveElement = el;
+                _op = Op.CreateArrow;
+                _dragStart = phys;
+                _model.RaiseChanged();
+                e.Pointer.Capture(this);
+                break;
+            }
+            case EditorTool.Polyline:
+            {
+                var el = new LineElement { Style = _state.LineStyleFor(EditorTool.Polyline) };
+                el.Points.Add(phys);
+                el.Points.Add(phys); // 预览点
+                _model.Elements.Add(el);
+                _liveElement = el;
+                _op = Op.CreatePolyline;
+                _model.RaiseChanged();
+                // 不捕获指针：折线靠点击序列而非拖拽
+                break;
+            }
+            default:
+                PressSelectTool(phys, s, e);
+                break;
+        }
         InvalidateVisual();
+    }
+
+    private void PressSelectTool(PixelPoint phys, double s, PointerPressedEventArgs e)
+    {
+        _dragMutated = false;
+        if (_model.Selected is ShapeElement shape)
+        {
+            if (HitRotationHandle(phys))
+            {
+                BeginElementDrag(Op.RotateElement, shape, phys, e);
+                return;
+            }
+            if (HitRadiusHandle(phys) is var radius && radius >= 0)
+            {
+                _handleIndex = radius;
+                BeginElementDrag(Op.RadiusElement, shape, phys, e);
+                return;
+            }
+            if (HitElementHandle(phys) is var handle && handle >= 0)
+            {
+                _handleIndex = handle;
+                BeginElementDrag(Op.ResizeElement, shape, phys, e);
+                return;
+            }
+        }
+        if (_model.Selected is LineElement line && HitLineVertex(phys) is var vertex && vertex >= 0)
+        {
+            _handleIndex = vertex;
+            BeginElementDrag(Op.MoveLinePoint, line, phys, e);
+            return;
+        }
+        if (_model.HitTest(phys, 4 * s) is { } hit)
+        {
+            _model.Selected = hit;
+            _state.SyncStyleFromSelection();
+            BeginElementDrag(hit is LineElement ? Op.MoveLine : Op.MoveElement, hit, phys, e);
+            return;
+        }
+        if (_model.Selected != null)
+            _model.Selected = null;
+        _op = Op.Selection;
+        _selection.PointerPressed(phys, s);
+        e.Pointer.Capture(this);
+    }
+
+    private void BeginElementDrag(Op op, AnnotationElement el, PixelPoint phys, PointerPressedEventArgs e)
+    {
+        _op = op;
+        _liveElement = el;
+        _dragStart = phys;
+        _dragBeforeState = el.CaptureState();
+        if (el is ShapeElement shape)
+            _dragStartBounds = shape.Bounds;
+        if (el is LineElement line)
+            _dragStartPoints = line.Points.ToArray();
+        e.Pointer.Capture(this);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -232,44 +310,54 @@ public sealed class EditorLayer : Control
             case Op.None:
                 UpdateCursor(phys);
                 return;
-            case Op.CreateShape when _liveElement != null:
-                _liveElement.Bounds = FromCorners(_dragStart, phys);
+            case Op.CreateShape when _liveElement is ShapeElement cs:
+                cs.Bounds = FromCorners(_dragStart, phys);
                 _model.RaiseChanged();
                 break;
-            case Op.ResizeElement when _liveElement != null:
+            case Op.CreateArrow when _liveElement is LineElement arrow:
+                arrow.Points[1] = phys;
+                _model.RaiseChanged();
+                break;
+            case Op.CreatePolyline when _liveElement is LineElement poly:
+                poly.Points[^1] = phys; // 预览段跟随
+                _model.RaiseChanged();
+                break;
+            case Op.ResizeElement when _liveElement is ShapeElement rs:
             {
-                // 指针逆旋转回未旋转坐标系（绕拖拽起始包围盒中心）再做锚点缩放
                 var center = new Point(
                     _dragStartBounds.X + _dragStartBounds.Width / 2.0,
                     _dragStartBounds.Y + _dragStartBounds.Height / 2.0);
                 var lp = ShapeElement.RotatePoint(
-                    new Point(phys.X, phys.Y), center, -_liveElement.Style.RotationDeg);
-                _liveElement.Bounds = ResizeByHandle(lp);
+                    new Point(phys.X, phys.Y), center, -rs.Style.RotationDeg);
+                rs.Bounds = ResizeByHandle(lp);
+                _dragMutated = true;
                 _model.RaiseChanged();
                 break;
             }
-            case Op.MoveElement when _liveElement != null:
-                _liveElement.Bounds = new PixelRect(
+            case Op.MoveElement when _liveElement is ShapeElement ms:
+                ms.Bounds = new PixelRect(
                     new PixelPoint(
                         _dragStartBounds.X + (phys.X - _dragStart.X),
                         _dragStartBounds.Y + (phys.Y - _dragStart.Y)),
                     _dragStartBounds.Size);
+                _dragMutated = true;
                 _model.RaiseChanged();
                 break;
-            case Op.RadiusElement when _liveElement != null:
+            case Op.RadiusElement when _liveElement is ShapeElement rads:
             {
-                var lp = _liveElement.ToUnrotated(new Point(phys.X, phys.Y));
-                _liveElement.Style = _liveElement.Style with
+                var lp = rads.ToUnrotated(new Point(phys.X, phys.Y));
+                rads.Style = rads.Style with
                 {
-                    CornerRadiusPercent = RadiusPercentFor(_liveElement.Bounds, lp, _handleIndex),
+                    CornerRadiusPercent = RadiusPercentFor(rads.Bounds, lp, _handleIndex),
                 };
+                _dragMutated = true;
                 _model.RaiseChanged();
                 _state.SyncStyleFromSelection();
                 break;
             }
-            case Op.RotateElement when _liveElement != null:
+            case Op.RotateElement when _liveElement is ShapeElement rots:
             {
-                var c = _liveElement.Center;
+                var c = rots.Center;
                 // 手柄位于元素上方（未旋转时朝向 -90°），故角度需 +90°
                 var deg = Math.Atan2(phys.Y - c.Y, phys.X - c.X) * 180 / Math.PI + 90;
                 if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
@@ -277,9 +365,25 @@ public sealed class EditorLayer : Control
                 deg = Math.Round(deg);
                 while (deg > 180) deg -= 360;
                 while (deg < -180) deg += 360;
-                _liveElement.Style = _liveElement.Style with { RotationDeg = deg };
+                rots.Style = rots.Style with { RotationDeg = deg };
+                _dragMutated = true;
                 _model.RaiseChanged();
                 _state.SyncStyleFromSelection();
+                break;
+            }
+            case Op.MoveLinePoint when _liveElement is LineElement lp1:
+                lp1.Points[_handleIndex] = phys;
+                _dragMutated = true;
+                _model.RaiseChanged();
+                break;
+            case Op.MoveLine when _liveElement is LineElement ml:
+            {
+                var dx = phys.X - _dragStart.X;
+                var dy = phys.Y - _dragStart.Y;
+                for (var i = 0; i < ml.Points.Count; i++)
+                    ml.Points[i] = new PixelPoint(_dragStartPoints[i].X + dx, _dragStartPoints[i].Y + dy);
+                _dragMutated = true;
+                _model.RaiseChanged();
                 break;
             }
             case Op.Selection:
@@ -291,45 +395,88 @@ public sealed class EditorLayer : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_op == Op.None || e.InitialPressMouseButton != MouseButton.Left)
-            return;
+        if (_op is Op.None or Op.CreatePolyline || e.InitialPressMouseButton != MouseButton.Left)
+            return; // 折线在点击间松开不结束创建
         var op = _op;
         _op = Op.None;
         e.Pointer.Capture(null);
 
         switch (op)
         {
-            case Op.CreateShape when _liveElement != null:
+            case Op.CreateShape when _liveElement is ShapeElement cs:
+            {
                 var threshold = 3 * Scaling;
-                if (_liveElement.Bounds.Width < threshold || _liveElement.Bounds.Height < threshold)
+                if (cs.Bounds.Width < threshold || cs.Bounds.Height < threshold)
                 {
-                    _model.Elements.Remove(_liveElement);
+                    _model.Elements.Remove(cs);
                     _model.RaiseChanged();
                 }
                 else
                 {
-                    _model.Push(new AddElementCommand(_model, _liveElement));
-                    _model.Selected = _liveElement;
+                    _model.Push(new AddElementCommand(_model, cs));
+                    _model.Selected = cs;
                     _state.Tool = EditorTool.Select; // 画完自动回到选择工具（TOOLS-SPEC §1）
                 }
                 break;
+            }
+            case Op.CreateArrow when _liveElement is LineElement arrow:
+            {
+                var a = arrow.Points[0];
+                var b = arrow.Points[1];
+                var len = Math.Sqrt(Math.Pow(b.X - a.X, 2) + Math.Pow(b.Y - a.Y, 2));
+                if (len < 3 * Scaling)
+                {
+                    _model.Elements.Remove(arrow);
+                    _model.RaiseChanged();
+                }
+                else
+                {
+                    _model.Push(new AddElementCommand(_model, arrow));
+                    _model.Selected = arrow;
+                    _state.Tool = EditorTool.Select;
+                }
+                break;
+            }
             case Op.MoveElement:
             case Op.ResizeElement:
             case Op.RadiusElement:
             case Op.RotateElement:
-                if (_liveElement != null
-                    && (_liveElement.Bounds != _dragStartBounds || _liveElement.Style != _dragStartStyle))
+            case Op.MoveLinePoint:
+            case Op.MoveLine:
+                if (_liveElement != null && _dragMutated && _dragBeforeState != null)
                     _model.Push(new MutateElementCommand(
-                        _liveElement, _dragStartBounds, _dragStartStyle,
-                        _liveElement.Bounds, _liveElement.Style));
+                        _liveElement, _dragBeforeState, _liveElement.CaptureState()));
                 break;
             case Op.Selection:
                 _selection.PointerReleased();
                 break;
         }
         _liveElement = null;
+        _dragBeforeState = null;
         UpdateCursor(ToPhysical(e));
         InvalidateVisual();
+    }
+
+    /// <summary>结束折线：去掉预览点，过短则丢弃；保留折线工具供连续绘制。</summary>
+    private void FinishPolyline(LineElement poly)
+    {
+        _op = Op.None;
+        _liveElement = null;
+        if (poly.Points.Count > 1)
+            poly.Points.RemoveAt(poly.Points.Count - 1); // 预览点（与双击首击位置重合）
+        double len = 0;
+        for (var i = 0; i < poly.Points.Count - 1; i++)
+            len += Math.Sqrt(
+                Math.Pow(poly.Points[i + 1].X - poly.Points[i].X, 2)
+                + Math.Pow(poly.Points[i + 1].Y - poly.Points[i].Y, 2));
+        if (poly.Points.Count < 2 || len < 3 * Scaling)
+        {
+            _model.Elements.Remove(poly);
+            _model.RaiseChanged();
+            return;
+        }
+        _model.Push(new AddElementCommand(_model, poly));
+        // 折线工具保持激活：下次点击开始新的折线
     }
 
     private static PixelRect FromCorners(PixelPoint a, PixelPoint b) => new(
@@ -366,25 +513,29 @@ public sealed class EditorLayer : Control
         return Math.Round(Math.Clamp((nx + ny) / 2 * 100, 0, 100));
     }
 
-    /// <returns>选中元素被命中的缩放手柄下标，未命中 -1。</returns>
+    // ---- 命中测试 ----
+
+    /// <returns>选中形状被命中的缩放手柄下标，未命中 -1。</returns>
     private int HitElementHandle(PixelPoint pos)
     {
-        if (_model.Selected is not { } el)
+        if (_model.Selected is not ShapeElement el)
             return -1;
         var hit = SelectionMetrics.HandleHitRadius * Scaling;
         for (var i = 0; i < SelectionController.HandleAnchors.Length; i++)
         {
-            var c = ResizeHandleCenter(el, i);
+            var (ax, ay) = SelectionController.HandleAnchors[i];
+            var p = new Point(el.Bounds.X + ax * el.Bounds.Width, el.Bounds.Y + ay * el.Bounds.Height);
+            var c = ShapeElement.RotatePoint(p, el.Center, el.Style.RotationDeg);
             if (Math.Abs(pos.X - c.X) <= hit && Math.Abs(pos.Y - c.Y) <= hit)
                 return i;
         }
         return -1;
     }
 
-    /// <returns>选中元素被命中的圆角手柄下标，未命中 -1。</returns>
+    /// <returns>选中形状被命中的圆角手柄下标，未命中 -1。</returns>
     private int HitRadiusHandle(PixelPoint pos)
     {
-        if (_model.Selected is not { } el)
+        if (_model.Selected is not ShapeElement el)
             return -1;
         var hit = SelectionMetrics.HandleHitRadius * Scaling;
         for (var i = 0; i < RadiusCorners.Length; i++)
@@ -399,7 +550,7 @@ public sealed class EditorLayer : Control
 
     private bool HitRotationHandle(PixelPoint pos)
     {
-        if (_model.Selected is not { } el)
+        if (_model.Selected is not ShapeElement el)
             return false;
         var hit = SelectionMetrics.HandleHitRadius * Scaling;
         var c = ShapeElement.RotatePoint(
@@ -407,12 +558,18 @@ public sealed class EditorLayer : Control
         return Math.Abs(pos.X - c.X) <= hit && Math.Abs(pos.Y - c.Y) <= hit;
     }
 
-    /// <summary>缩放手柄中心（物理像素，已含旋转）。</summary>
-    private Point ResizeHandleCenter(ShapeElement el, int index)
+    /// <returns>选中线元素被命中的控制点下标，未命中 -1。</returns>
+    private int HitLineVertex(PixelPoint pos)
     {
-        var (ax, ay) = SelectionController.HandleAnchors[index];
-        var p = new Point(el.Bounds.X + ax * el.Bounds.Width, el.Bounds.Y + ay * el.Bounds.Height);
-        return ShapeElement.RotatePoint(p, el.Center, el.Style.RotationDeg);
+        if (_model.Selected is not LineElement el)
+            return -1;
+        var hit = SelectionMetrics.HandleHitRadius * Scaling;
+        for (var i = 0; i < el.Points.Count; i++)
+        {
+            if (Math.Abs(pos.X - el.Points[i].X) <= hit && Math.Abs(pos.Y - el.Points[i].Y) <= hit)
+                return i;
+        }
+        return -1;
     }
 
     /// <summary>
@@ -443,9 +600,13 @@ public sealed class EditorLayer : Control
     private void UpdateCursor(PixelPoint phys)
     {
         StandardCursorType type;
-        if (_state.Tool == EditorTool.Shape)
+        if (_state.Tool is EditorTool.Shape or EditorTool.Arrow or EditorTool.Polyline)
         {
             type = StandardCursorType.Cross;
+        }
+        else if (HitLineVertex(phys) >= 0)
+        {
+            type = StandardCursorType.Cross; // 线端点/控制点：十字
         }
         else if (HitRotationHandle(phys) || HitRadiusHandle(phys) >= 0)
         {
@@ -479,9 +640,22 @@ public sealed class EditorLayer : Control
         // 透明底保证整层可命中
         context.DrawRectangle(Brushes.Transparent, null, new Rect(Bounds.Size));
 
-        if (_model.Selected is not { } el || _op == Op.CreateShape)
+        if (_op is Op.CreateShape or Op.CreateArrow or Op.CreatePolyline)
             return;
 
+        switch (_model.Selected)
+        {
+            case ShapeElement shape:
+                RenderShapeHandles(context, shape);
+                break;
+            case LineElement line:
+                RenderLineHandles(context, line);
+                break;
+        }
+    }
+
+    private void RenderShapeHandles(DrawingContext context, ShapeElement el)
+    {
         var local = ToLocal(el.Bounds);
         const double hs = SelectionMetrics.HandleSize;
 
@@ -509,6 +683,16 @@ public sealed class EditorLayer : Control
                 var c = ToLocal(RadiusHandleCenterUnrotated(el, i));
                 context.DrawEllipse(Brushes.White, RadiusHandlePen, c, hs / 2, hs / 2);
             }
+        }
+    }
+
+    private void RenderLineHandles(DrawingContext context, LineElement el)
+    {
+        const double hs = SelectionMetrics.HandleSize;
+        foreach (var p in el.Points)
+        {
+            var c = ToLocal(p);
+            context.DrawEllipse(Brushes.White, HandlePen, c, hs / 2 + 0.5, hs / 2 + 0.5);
         }
     }
 }

@@ -65,6 +65,13 @@ public sealed class CaptureController
     /// <summary>测试钩子：只设定选区不复制。</summary>
     public void TestSelect(PixelRect physicalRect) => _session?.TestSelect(physicalRect);
 
+    /// <summary>测试钩子：添加一条线/箭头标注。</summary>
+    public void TestAddLine(
+        IReadOnlyList<PixelPoint> points, Annotations.LineCapKind startCap, Annotations.LineCapKind endCap,
+        double startThickness, double endThickness, bool spline, int lineStyleIndex, double opacity) =>
+        _session?.TestAddLine(points, startCap, endCap, startThickness, endThickness,
+            spline, lineStyleIndex, opacity);
+
     /// <summary>测试钩子：添加一个形状标注。</summary>
     public void TestAddShape(
         PixelRect bounds, double radiusPercent, bool filled, double thickness,

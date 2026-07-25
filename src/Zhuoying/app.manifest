@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <!-- 与 Directory.Build.props 的 VersionPrefix 手动保持同步（主.次.0.0） -->
-  <assemblyIdentity version="0.3.0.0" name="Zhuoying.App" />
+  <assemblyIdentity version="0.4.0.0" name="Zhuoying.App" />
 
   <!-- Per-Monitor DPI Aware v2：混合 DPI 多屏为一级支持场景（REQUIREMENTS §2） -->
   <application xmlns="urn:schemas-microsoft-com:asm.v3">

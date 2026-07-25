@@ -73,6 +73,33 @@ public sealed class CaptureSession
     /// <summary>测试钩子：只设定选区不复制（供视觉验证选区渲染与工具条定位）。</summary>
     public void TestSelect(PixelRect physicalRect) => _selection.SetSelection(physicalRect);
 
+    /// <summary>测试钩子：添加一条线/箭头元素（免注入验证线渲染与输出合成）。</summary>
+    public void TestAddLine(
+        IReadOnlyList<PixelPoint> points, LineCapKind startCap, LineCapKind endCap,
+        double startThickness, double endThickness, bool spline, int lineStyleIndex, double opacity)
+    {
+        var el = new LineElement
+        {
+            // 两点 + 有末端头视为箭头工具产物（决定样式槽与"弧线"开关的显隐）
+            IsArrowTool = points.Count == 2 && endCap != LineCapKind.None,
+            Style = new LineStyle
+            {
+                Color = _editor.CurrentLineStyle.Color,
+                StartCap = startCap,
+                EndCap = endCap,
+                StartThickness = startThickness,
+                EndThickness = endThickness,
+                Spline = spline,
+                LineStyleIndex = lineStyleIndex,
+                Opacity = opacity,
+            },
+        };
+        el.Points.AddRange(points);
+        _annotations.Elements.Add(el);
+        _annotations.Push(new AddElementCommand(_annotations, el));
+        _annotations.Selected = el;
+    }
+
     /// <summary>测试钩子：添加一个形状元素并选中（免注入验证标注渲染与输出合成）。</summary>
     public void TestAddShape(
         PixelRect bounds, double radiusPercent, bool filled, double thickness,
@@ -141,8 +168,7 @@ public sealed class CaptureSession
                 new Rect(0, 0, sel.Width, sel.Height));
             foreach (var el in _annotations.Elements)
             {
-                el.Render(ctx, r => new Rect(
-                    r.X - sel.X, r.Y - sel.Y, r.Width, r.Height), 1.0);
+                el.Render(ctx, p => new Point(p.X - sel.X, p.Y - sel.Y), 1.0);
             }
         }
 

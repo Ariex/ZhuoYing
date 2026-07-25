@@ -50,6 +50,7 @@ public partial class App : Application
             SetupTestRectHook(args, "--test-copy", r => _captureController!.TestCopy(r));
             SetupTestRectHook(args, "--test-select", r => _captureController!.TestSelect(r));
             SetupTestShapeHook(args);
+            SetupTestLineHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -106,6 +107,35 @@ public partial class App : Application
         DispatcherTimer.RunOnce(
             () => _captureController!.TestAddShape(
                 rect, radius, filled, thickness, rotation, lineStyle, opacity),
+            TimeSpan.FromMilliseconds(2200));
+    }
+
+    /// <summary>
+    /// 解析 `--test-line "x:y;x:y;...[,起端,末端,起粗,末粗,样条0/1,线形,透明度]"`：
+    /// 2.2s 时添加线/箭头标注（端头为 LineCapKind 枚举序号）。
+    /// </summary>
+    private void SetupTestLineHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-line");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var p = args[index + 1].Split(',');
+        var points = new System.Collections.Generic.List<Avalonia.PixelPoint>();
+        foreach (var pair in p[0].Split(';'))
+        {
+            var xy = pair.Split(':');
+            points.Add(new Avalonia.PixelPoint(int.Parse(xy[0]), int.Parse(xy[1])));
+        }
+        var startCap = (Zhuoying.Annotations.LineCapKind)(p.Length > 1 ? int.Parse(p[1]) : 0);
+        var endCap = (Zhuoying.Annotations.LineCapKind)(p.Length > 2 ? int.Parse(p[2]) : 0);
+        var startT = p.Length > 3 ? double.Parse(p[3]) : 5;
+        var endT = p.Length > 4 ? double.Parse(p[4]) : 5;
+        var spline = p.Length > 5 && p[5] == "1";
+        var lineStyle = p.Length > 6 ? int.Parse(p[6]) : 0;
+        var opacity = p.Length > 7 ? double.Parse(p[7]) : 100;
+        DispatcherTimer.RunOnce(
+            () => _captureController!.TestAddLine(
+                points, startCap, endCap, startT, endT, spline, lineStyle, opacity),
             TimeSpan.FromMilliseconds(2200));
     }
 

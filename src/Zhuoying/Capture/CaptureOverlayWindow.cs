@@ -194,14 +194,25 @@ public sealed class CaptureOverlayWindow : Window
             _editorState.Tool = EditorTool.Shape;
             e.Handled = true;
         }
+        else if (e.Key == Key.A)
+        {
+            _editorState.Tool = EditorTool.Arrow;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.L)
+        {
+            _editorState.Tool = EditorTool.Polyline;
+            e.Handled = true;
+        }
     }
 
     private void OnPointerPressedHandler(object? sender, PointerPressedEventArgs e)
     {
-        // 右键 = 后退/取消（REQUIREMENTS §4 取消逻辑，当前直接取消本次截屏）
+        // 右键 = 后退/取消：先取消进行中的绘制（如折线逐点），否则取消本次截屏
         if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
         {
-            _requestCancel();
+            if (!_editorLayer.CancelInProgress())
+                _requestCancel();
             e.Handled = true;
         }
     }

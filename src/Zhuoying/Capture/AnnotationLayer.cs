@@ -29,9 +29,8 @@ public sealed class AnnotationLayer : Control
         var s = Scaling;
         foreach (var el in _model.Elements)
         {
-            el.Render(context, r => new Rect(
-                (r.X - _origin.X) / s, (r.Y - _origin.Y) / s,
-                r.Width / s, r.Height / s), s);
+            el.Render(context,
+                p => new Point((p.X - _origin.X) / s, (p.Y - _origin.Y) / s), s);
         }
     }
 }

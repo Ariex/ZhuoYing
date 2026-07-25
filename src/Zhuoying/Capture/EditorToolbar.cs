@@ -31,16 +31,26 @@ public sealed class EditorToolbar
 
     private readonly Button _selectButton;
     private readonly Button _shapeButton;
+    private readonly Button _lineToolButton;
     private readonly Button _undoButton;
     private readonly Button _redoButton;
     private readonly StackPanel _propertyRow;
     private readonly CheckBox _fillCheck;
-    private readonly ComboBox _lineCombo;
+    private readonly Button _shapeDashButton;
     private readonly TextBlock _thicknessText;
     private readonly TextBlock _radiusText;
     private readonly TextBlock _rotationText;
     private readonly TextBlock _opacityText;
     private readonly StackPanel _swatchPanel;
+    private readonly StackPanel _linePropertyRow;
+    private readonly Button _lineDashButton;
+    private readonly Button _startCapButton;
+    private readonly Button _endCapButton;
+    private readonly CheckBox _splineCheck;
+    private readonly TextBlock _startThickText;
+    private readonly TextBlock _endThickText;
+    private readonly TextBlock _lineOpacityText;
+    private readonly StackPanel _lineSwatchPanel;
 
     public Border Root { get; }
 
@@ -54,6 +64,9 @@ public sealed class EditorToolbar
 
         _selectButton = ToolButton(SelectIcon(), "选择 (V)", () => _state.Tool = EditorTool.Select);
         _shapeButton = ToolButton(RectIcon(22, 14, 11), "形状 (S)", () => _state.Tool = EditorTool.Shape);
+        _lineToolButton = ToolButton(ArrowIcon(), "箭头/折线 (A / L)",
+            () => _state.Tool = _state.LastLineTool);
+        var lineToolHost = AttachLineToolPopup(_lineToolButton);
         _undoButton = ToolButton(GlyphIcon("↶"), "撤销 (Ctrl+Z)", () => _model.Undo());
         _redoButton = ToolButton(GlyphIcon("↷"), "重做 (Ctrl+Y)", () => _model.Redo());
         var copyButton = ToolButton(CopyIcon(), "复制 (Enter)", copy);
@@ -65,7 +78,7 @@ public sealed class EditorToolbar
             Spacing = 2,
             Children =
             {
-                _selectButton, _shapeButton, Separator(),
+                _selectButton, _shapeButton, lineToolHost, Separator(),
                 _undoButton, _redoButton, Separator(),
                 copyButton, cancelButton,
             },
@@ -79,39 +92,12 @@ public sealed class EditorToolbar
             _state.ModifyStyle(s => s with { Filled = filled });
         };
 
-        _lineCombo = new ComboBox
-        {
-            Width = 84,
-            Height = 30,
-            VerticalAlignment = VerticalAlignment.Center,
-            ItemsSource = LineStyles.All,
-            SelectedIndex = 0,
-            ItemTemplate = new FuncDataTemplate<LineStyleDef>((def, _) =>
-            {
-                if (def == null)
-                    return new Panel();
-                var line = new Avalonia.Controls.Shapes.Line
-                {
-                    StartPoint = new Point(2, 7),
-                    EndPoint = new Point(46, 7),
-                    Stroke = new SolidColorBrush(IconColor),
-                    StrokeThickness = 2,
-                };
-                if (def.Dashes != null)
-                {
-                    line.StrokeDashArray = new AvaloniaList<double>(def.Dashes);
-                    line.StrokeLineCap = PenLineCap.Round; // 与实际渲染一致的圆头
-                }
-                return new Canvas { Width = 48, Height = 14, Children = { line } };
-            }),
-        };
-        ToolTip.SetTip(_lineCombo, "线形");
-        _lineCombo.SelectionChanged += (_, _) =>
-        {
-            if (_refreshing || _lineCombo.SelectedIndex < 0) return;
-            var index = _lineCombo.SelectedIndex;
-            _state.ModifyStyle(s => s with { LineStyleIndex = index });
-        };
+        var shapeDashHost = PaletteButton(
+            () => _state.CurrentStyle.LineStyleIndex,
+            i => _state.ModifyStyle(s => s with { LineStyleIndex = i }),
+            LineStyles.All.Length,
+            i => DashPreview(i, 40),
+            out _shapeDashButton);
 
         _thicknessText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 22 };
         var thicknessButton = SliderPopupButton(
@@ -149,8 +135,75 @@ public sealed class EditorToolbar
             Spacing = 6,
             Children =
             {
-                _fillCheck, _lineCombo, thicknessButton, radiusButton, rotationButton, opacityButton,
+                _fillCheck, shapeDashHost, thicknessButton, radiusButton, rotationButton, opacityButton,
                 Separator(), _swatchPanel,
+            },
+        };
+
+        // ---- 线/箭头属性行 ----
+
+        var capCount = Enum.GetValues<LineCapKind>().Length;
+        var lineDashHost = PaletteButton(
+            () => _state.CurrentLineStyle.LineStyleIndex,
+            i => _state.ModifyLineStyle(s => s with { LineStyleIndex = i }),
+            LineStyles.All.Length,
+            i => DashPreview(i, 40),
+            out _lineDashButton);
+        var startCapHost = PaletteButton(
+            () => (int)_state.CurrentLineStyle.StartCap,
+            i => _state.ModifyLineStyle(s => s with { StartCap = (LineCapKind)i }),
+            capCount,
+            i => new CapPreview { Kind = (LineCapKind)i, AtStart = true, Width = 24 },
+            out _startCapButton);
+        var endCapHost = PaletteButton(
+            () => (int)_state.CurrentLineStyle.EndCap,
+            i => _state.ModifyLineStyle(s => s with { EndCap = (LineCapKind)i }),
+            capCount,
+            i => new CapPreview { Kind = (LineCapKind)i, AtStart = false, Width = 24 },
+            out _endCapButton);
+
+        _startThickText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 20 };
+        var startThickButton = SliderPopupButton(
+            CapThicknessIcon(atStart: true), _startThickText, "起端粗细",
+            min: 1, max: 100,
+            get: () => _state.CurrentLineStyle.StartThickness,
+            setLive: v => _state.ModifyLineStyleLive(s => s with { StartThickness = Math.Round(v) }),
+            extra: ("应用到末端", () => _state.ModifyLineStyle(s => s with { EndThickness = s.StartThickness })));
+
+        _endThickText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 20 };
+        var endThickButton = SliderPopupButton(
+            CapThicknessIcon(atStart: false), _endThickText, "末端粗细",
+            min: 1, max: 100,
+            get: () => _state.CurrentLineStyle.EndThickness,
+            setLive: v => _state.ModifyLineStyleLive(s => s with { EndThickness = Math.Round(v) }),
+            extra: ("应用到起端", () => _state.ModifyLineStyle(s => s with { StartThickness = s.EndThickness })));
+
+        _splineCheck = new CheckBox { Content = "弧线", VerticalAlignment = VerticalAlignment.Center };
+        _splineCheck.IsCheckedChanged += (_, _) =>
+        {
+            if (_refreshing) return;
+            var spline = _splineCheck.IsChecked == true;
+            _state.ModifyLineStyle(s => s with { Spline = spline });
+        };
+
+        _lineOpacityText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
+        var lineOpacityButton = SliderPopupButton(
+            OpacityIcon(), _lineOpacityText, "透明度",
+            min: 0, max: 100,
+            get: () => _state.CurrentLineStyle.Opacity,
+            setLive: v => _state.ModifyLineStyleLive(s => s with { Opacity = Math.Round(v) }));
+
+        _lineSwatchPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+
+        _linePropertyRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
+            {
+                lineDashHost, startCapHost, endCapHost,
+                startThickButton, endThickButton, _splineCheck, lineOpacityButton,
+                Separator(), _lineSwatchPanel,
             },
         };
 
@@ -164,7 +217,7 @@ public sealed class EditorToolbar
             Child = new StackPanel
             {
                 Spacing = 4,
-                Children = { toolRow, _propertyRow },
+                Children = { toolRow, _propertyRow, _linePropertyRow },
             },
         };
 
@@ -180,45 +233,76 @@ public sealed class EditorToolbar
         try
         {
             var style = _state.CurrentStyle;
+            var lineStyle = _state.CurrentLineStyle;
             _selectButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Select ? ActiveBackground : Colors.Transparent);
             _shapeButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Shape ? ActiveBackground : Colors.Transparent);
+            _lineToolButton.Background = new SolidColorBrush(
+                _state.Tool is EditorTool.Arrow or EditorTool.Polyline
+                    ? ActiveBackground : Colors.Transparent);
+            _lineToolButton.Content = _state.LastLineTool == EditorTool.Polyline
+                ? PolylineIcon() : ArrowIcon();
             _undoButton.IsEnabled = _model.CanUndo;
             _redoButton.IsEnabled = _model.CanRedo;
 
-            var showProps = _state.Tool == EditorTool.Shape || _model.Selected != null;
-            if (_propertyRow.IsVisible != showProps)
+            var showShapeProps = _state.Tool == EditorTool.Shape || _model.Selected is ShapeElement;
+            var showLineProps = _state.Tool is EditorTool.Arrow or EditorTool.Polyline
+                                || _model.Selected is LineElement;
+            // 弧线只对折线有意义（箭头固定两点，样条无效果）
+            var showSpline = _state.Tool == EditorTool.Polyline
+                             || (_model.Selected is LineElement { IsArrowTool: false });
+            if (_propertyRow.IsVisible != showShapeProps
+                || _linePropertyRow.IsVisible != showLineProps
+                || _splineCheck.IsVisible != showSpline)
             {
-                _propertyRow.IsVisible = showProps;
+                _propertyRow.IsVisible = showShapeProps;
+                _linePropertyRow.IsVisible = showLineProps;
+                _splineCheck.IsVisible = showSpline;
                 LayoutChanged?.Invoke();
             }
 
             _fillCheck.IsChecked = style.Filled;
-            _lineCombo.SelectedIndex = style.LineStyleIndex;
+            _shapeDashButton.Content = WithChevron(DashPreview(style.LineStyleIndex, 30));
             _thicknessText.Text = ((int)style.Thickness).ToString();
             _radiusText.Text = ((int)style.CornerRadiusPercent).ToString();
             _rotationText.Text = $"{(int)style.RotationDeg}°";
             _opacityText.Text = ((int)style.Opacity).ToString();
+            RefreshSwatches(_swatchPanel, style.Color, c => _state.ModifyStyle(s => s with { Color = c }));
 
-            _swatchPanel.Children.Clear();
-            foreach (var color in _state.PresetColors)
-            {
-                var c = color;
-                var button = new Button
-                {
-                    Padding = new Thickness(0),
-                    Background = Brushes.Transparent,
-                    Content = RingedSwatch(c, ringed: c == style.Color, size: 16),
-                };
-                ToolTip.SetTip(button, $"#{c.R:X2}{c.G:X2}{c.B:X2}");
-                button.Click += (_, _) => _state.ModifyStyle(s => s with { Color = c });
-                _swatchPanel.Children.Add(button);
-            }
+            _lineDashButton.Content = WithChevron(DashPreview(lineStyle.LineStyleIndex, 30));
+            _startCapButton.Content = WithChevron(
+                new CapPreview { Kind = lineStyle.StartCap, AtStart = true, Width = 20 });
+            _endCapButton.Content = WithChevron(
+                new CapPreview { Kind = lineStyle.EndCap, AtStart = false, Width = 20 });
+            _startThickText.Text = ((int)lineStyle.StartThickness).ToString();
+            _endThickText.Text = ((int)lineStyle.EndThickness).ToString();
+            _splineCheck.IsChecked = lineStyle.Spline;
+            _lineOpacityText.Text = ((int)lineStyle.Opacity).ToString();
+            RefreshSwatches(_lineSwatchPanel, lineStyle.Color,
+                c => _state.ModifyLineStyle(s => s with { Color = c }));
         }
         finally
         {
             _refreshing = false;
+        }
+    }
+
+    private void RefreshSwatches(StackPanel panel, Color current, Action<Color> pick)
+    {
+        panel.Children.Clear();
+        foreach (var color in _state.PresetColors)
+        {
+            var c = color;
+            var button = new Button
+            {
+                Padding = new Thickness(0),
+                Background = Brushes.Transparent,
+                Content = RingedSwatch(c, ringed: c == current, size: 16),
+            };
+            ToolTip.SetTip(button, $"#{c.R:X2}{c.G:X2}{c.B:X2}");
+            button.Click += (_, _) => pick(c);
+            panel.Children.Add(button);
         }
     }
 
@@ -272,7 +356,8 @@ public sealed class EditorToolbar
     private Control SliderPopupButton(
         Control icon, TextBlock valueText, string label,
         double min, double max,
-        Func<double> get, Action<double> setLive)
+        Func<double> get, Action<double> setLive,
+        (string Text, Action Run)? extra = null)
     {
         var button = new Button
         {
@@ -341,6 +426,18 @@ public sealed class EditorToolbar
                 },
             },
         };
+        if (extra is { } ex)
+        {
+            var applyButton = new Button
+            {
+                Content = ex.Text,
+                FontSize = 11,
+                Padding = new Thickness(8, 3),
+                CornerRadius = new CornerRadius(4),
+            };
+            applyButton.Click += (_, _) => ex.Run();
+            ((StackPanel)content.Child!).Children.Insert(1, applyButton);
+        }
 
         var popup = new Popup
         {
@@ -406,6 +503,243 @@ public sealed class EditorToolbar
 
         return new Panel { Children = { button, popup } };
     }
+
+    /// <summary>
+    /// 横向调色板式选择按钮：按钮显示当前项预览，悬浮/点击弹出横向选项条
+    ///（子工具条样式，与滑条弹层同一套看门狗关闭逻辑）。
+    /// </summary>
+    private Control PaletteButton(
+        Func<int> get, Action<int> set, int count, Func<int, Control> preview, out Button button)
+    {
+        var btn = new Button
+        {
+            Height = 30,
+            Padding = new Thickness(5, 0),
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(5),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        AddStateBackground(btn, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+        AddStateBackground(btn, ":pressed", Color.FromRgb(0xD4, 0xD4, 0xD4));
+
+        var itemsPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var content = new Border
+        {
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(4),
+            BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
+            Cursor = new Cursor(StandardCursorType.Arrow),
+            Child = itemsPanel,
+        };
+        var popup = new Popup
+        {
+            PlacementTarget = btn,
+            Placement = PlacementMode.Bottom,
+            VerticalOffset = 2,
+            IsLightDismissEnabled = false,
+            Child = content,
+        };
+
+        void Rebuild()
+        {
+            itemsPanel.Children.Clear();
+            for (var i = 0; i < count; i++)
+            {
+                var idx = i;
+                var item = new Button
+                {
+                    Padding = new Thickness(3),
+                    CornerRadius = new CornerRadius(4),
+                    Background = new SolidColorBrush(
+                        idx == get() ? ActiveBackground : Colors.Transparent),
+                    Content = preview(idx),
+                };
+                AddStateBackground(item, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+                item.Click += (_, _) =>
+                {
+                    set(idx);
+                    popup.IsOpen = false;
+                };
+                itemsPanel.Children.Add(item);
+            }
+        }
+
+        void WatchClose() => DispatcherTimer.RunOnce(() =>
+        {
+            if (!popup.IsOpen)
+                return;
+            if (btn.IsPointerOver || content.IsPointerOver)
+            {
+                WatchClose();
+                return;
+            }
+            popup.IsOpen = false;
+        }, TimeSpan.FromMilliseconds(300));
+
+        void Open()
+        {
+            if (popup.IsOpen)
+                return;
+            Rebuild();
+            popup.IsOpen = true;
+            WatchClose();
+        }
+
+        btn.PointerEntered += (_, _) => Open();
+        btn.Click += (_, _) => Open();
+        button = btn;
+        return new Panel { Children = { btn, popup } };
+    }
+
+    /// <summary>当前项预览 + 下拉指示小箭头。</summary>
+    private static Control WithChevron(Control preview) => new StackPanel
+    {
+        Orientation = Orientation.Horizontal,
+        Spacing = 2,
+        VerticalAlignment = VerticalAlignment.Center,
+        Children =
+        {
+            preview,
+            new TextBlock
+            {
+                Text = "▾",
+                FontSize = 9,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x90, 0x90, 0x90)),
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        },
+    };
+
+    /// <summary>线形预览：指定宽度的短线。</summary>
+    private static Control DashPreview(int index, double width)
+    {
+        var def = LineStyles.All[Math.Clamp(index, 0, LineStyles.All.Length - 1)];
+        var line = new Avalonia.Controls.Shapes.Line
+        {
+            StartPoint = new Point(2, 7),
+            EndPoint = new Point(width - 2, 7),
+            Stroke = new SolidColorBrush(IconColor),
+            StrokeThickness = 2,
+        };
+        if (def.Dashes != null)
+        {
+            line.StrokeDashArray = new AvaloniaList<double>(def.Dashes);
+            line.StrokeLineCap = PenLineCap.Round; // 与实际渲染一致的圆头
+        }
+        return new Canvas { Width = width, Height = 14, Children = { line } };
+    }
+
+    /// <summary>端头样式预览：短线 + 对应端头（复用 LineElement 端头绘制，所见即所得）。</summary>
+    private sealed class CapPreview : Control
+    {
+        public LineCapKind Kind { get; init; }
+        public bool AtStart { get; init; }
+
+        public CapPreview()
+        {
+            Width = 24;
+            Height = 16;
+        }
+
+        public override void Render(DrawingContext context)
+        {
+            const double t = 3; // 稍粗的预览线，突出端头本身
+            const double y = 8;
+            var right = Bounds.Width - 2;
+            var inset = LineElement.CapInset(Kind, LineElement.CapLength(t));
+            var pen = new Pen(new SolidColorBrush(IconColor), t) { LineCap = PenLineCap.Round };
+            if (AtStart)
+            {
+                context.DrawLine(pen, new Point(2 + inset, y), new Point(right, y));
+                LineElement.DrawCap(context, new Point(2, y), new Vector(-1, 0), t, Kind, IconColor);
+            }
+            else
+            {
+                context.DrawLine(pen, new Point(2, y), new Point(right - inset, y));
+                LineElement.DrawCap(context, new Point(right, y), new Vector(1, 0), t, Kind, IconColor);
+            }
+        }
+    }
+
+    /// <summary>给箭头/折线主按钮挂子工具选择弹层（悬浮出现，选择即激活）。</summary>
+    private Control AttachLineToolPopup(Button button)
+    {
+        // 悬浮弹层按钮不能挂 ToolTip（气泡使 IsPointerOver 失真，见 TROUBLESHOOTING §10 旁注）
+        ToolTip.SetTip(button, null);
+
+        var arrowChoice = ToolButton(ArrowIcon(), "", () => { });
+        var polyChoice = ToolButton(PolylineIcon(), "", () => { });
+        ToolTip.SetTip(arrowChoice, null);
+        ToolTip.SetTip(polyChoice, null);
+
+        var content = new Border
+        {
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(4),
+            BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 2,
+                Children =
+                {
+                    WithLabel(arrowChoice, "箭头"),
+                    WithLabel(polyChoice, "折线"),
+                },
+            },
+        };
+        var popup = new Popup
+        {
+            PlacementTarget = button,
+            Placement = PlacementMode.Bottom,
+            VerticalOffset = 2,
+            IsLightDismissEnabled = false,
+            Child = content,
+        };
+
+        void Close() => popup.IsOpen = false;
+        void WatchClose() => DispatcherTimer.RunOnce(() =>
+        {
+            if (!popup.IsOpen)
+                return;
+            if (button.IsPointerOver || content.IsPointerOver)
+            {
+                WatchClose();
+                return;
+            }
+            Close();
+        }, TimeSpan.FromMilliseconds(300));
+
+        button.PointerEntered += (_, _) =>
+        {
+            if (popup.IsOpen)
+                return;
+            popup.IsOpen = true;
+            WatchClose();
+        };
+        arrowChoice.Click += (_, _) => { _state.Tool = EditorTool.Arrow; Close(); };
+        polyChoice.Click += (_, _) => { _state.Tool = EditorTool.Polyline; Close(); };
+
+        return new Panel { Children = { button, popup } };
+    }
+
+    private static Control WithLabel(Control control, string label) => new StackPanel
+    {
+        Spacing = 1,
+        Children =
+        {
+            control,
+            new TextBlock
+            {
+                Text = label,
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            },
+        },
+    };
 
     private static Button ToolButton(Control icon, string tip, Action onClick)
     {
@@ -517,6 +851,62 @@ public sealed class EditorToolbar
             y += w + 3;
         }
         return canvas;
+    }
+
+    /// <summary>箭头图标：斜线 + 实心三角头。</summary>
+    private static Control ArrowIcon()
+    {
+        var brush = new SolidColorBrush(IconColor);
+        var line = new Avalonia.Controls.Shapes.Line
+        {
+            StartPoint = new Point(5, 17),
+            EndPoint = new Point(13, 9),
+            Stroke = brush,
+            StrokeThickness = 2,
+            StrokeLineCap = PenLineCap.Round,
+        };
+        var head = new Avalonia.Controls.Shapes.Polygon
+        {
+            Points = [new Point(17, 5), new Point(9.8, 7.6), new Point(14.4, 12.2)],
+            Fill = brush,
+        };
+        return new Canvas { Width = 22, Height = 22, Children = { line, head } };
+    }
+
+    /// <summary>折线图标：之字线。</summary>
+    private static Control PolylineIcon() => new Canvas
+    {
+        Width = 22,
+        Height = 22,
+        Children =
+        {
+            new Avalonia.Controls.Shapes.Polyline
+            {
+                Points = [new Point(3, 16), new Point(8.5, 7), new Point(13.5, 13), new Point(19, 5)],
+                Stroke = new SolidColorBrush(IconColor),
+                StrokeThickness = 2,
+                StrokeLineCap = PenLineCap.Round,
+                StrokeJoin = PenLineJoin.Round,
+            },
+        },
+    };
+
+    /// <summary>端点粗细图标：一端粗一端细的楔形线。</summary>
+    private static Control CapThicknessIcon(bool atStart)
+    {
+        var thick = atStart ? new Point(2, 8) : new Point(16, 8);
+        var thin = atStart ? new Point(16, 8) : new Point(2, 8);
+        var n = 3.0;
+        var geo = new Avalonia.Controls.Shapes.Polygon
+        {
+            Points =
+            [
+                new Point(thick.X, thick.Y - n), new Point(thin.X, thin.Y - 0.6),
+                new Point(thin.X, thin.Y + 0.6), new Point(thick.X, thick.Y + n),
+            ],
+            Fill = new SolidColorBrush(IconColor),
+        };
+        return new Canvas { Width = 18, Height = 16, Children = { geo } };
     }
 
     /// <summary>透明度图标：从实到透的渐变方块。</summary>

@@ -8,20 +8,29 @@ namespace Zhuoying.Annotations;
 /// 矩形形状元素（圆角可调，100% 圆角 = 椭圆）。
 /// 几何为虚拟屏幕物理像素；渲染时由调用方提供物理 → 目标坐标换算。
 /// </summary>
-public sealed class ShapeElement
+public sealed class ShapeElement : AnnotationElement
 {
     /// <summary>包围矩形（虚拟屏幕物理像素，已规范化）。</summary>
     public PixelRect Bounds { get; set; }
 
     public ShapeStyle Style { get; set; } = new();
 
-    /// <param name="toLocal">物理像素矩形 → 目标坐标系矩形。</param>
-    /// <param name="scale">目标坐标系每单位对应的物理像素数（线宽换算用）。</param>
-    public void Render(DrawingContext context, Func<PixelRect, Rect> toLocal, double scale)
+    public override object CaptureState() => (Bounds, Style);
+
+    public override void RestoreState(object state)
+    {
+        var (bounds, style) = ((PixelRect, ShapeStyle))state;
+        Bounds = bounds;
+        Style = style;
+    }
+
+    public override void Render(DrawingContext context, Func<Point, Point> toLocal, double scale)
     {
         if (Bounds.Width <= 0 || Bounds.Height <= 0)
             return;
-        var r = toLocal(Bounds);
+        var r = new Rect(
+            toLocal(new Point(Bounds.X, Bounds.Y)),
+            toLocal(new Point(Bounds.Right, Bounds.Bottom)));
         var rx = Style.CornerRadiusPercent / 100 * r.Width / 2;
         var ry = Style.CornerRadiusPercent / 100 * r.Height / 2;
         var brush = new SolidColorBrush(Style.Color);
@@ -36,7 +45,18 @@ public sealed class ShapeElement
         using (context.PushTransform(RotationMatrix(r.Center, Style.RotationDeg)))
         using (context.PushOpacity(Math.Clamp(Style.Opacity, 0, 100) / 100))
         {
-            context.DrawRectangle(Style.Filled ? brush : null, pen, r, rx, ry);
+            // PushOpacity 按图元逐个混合，填充若延伸到描边下方，半透明时重叠区会变深。
+            // 因此填充内缩到描边内沿，与描边不重叠（圆角相应减小）
+            if (Style.Filled)
+            {
+                var inset = Style.Thickness / scale / 2;
+                if (r.Width > inset * 2 && r.Height > inset * 2)
+                {
+                    context.DrawRectangle(brush, null, r.Deflate(inset),
+                        Math.Max(0, rx - inset), Math.Max(0, ry - inset));
+                }
+            }
+            context.DrawRectangle(null, pen, r, rx, ry);
         }
     }
 
@@ -80,7 +100,7 @@ public sealed class ShapeElement
     /// 命中测试（物理像素，已考虑旋转）。整个形状内部均可命中
     ///（未填充也一样——点击形状内拖拽应移动形状而非操作选区）。
     /// </summary>
-    public bool HitTest(PixelPoint p, double slop)
+    public override bool HitTest(PixelPoint p, double slop)
     {
         var half = Style.Thickness / 2 + slop;
         return ContainsRounded(ToUnrotated(new Point(p.X, p.Y)), half);
