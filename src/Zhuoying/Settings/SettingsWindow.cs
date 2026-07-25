@@ -110,11 +110,20 @@ public sealed class SettingsWindow : Window
             box.TextChanged += (_, _) => UpdatePreview(b, p);
             UpdatePreview(box, preview);
             _colorEditors.Add((box, preview));
+            // 取色器：选色写回十六进制框（预览随 TextChanged 联动）
+            var picker = new Zhuoying.Capture.ColorPickButton(
+                () => Color.TryParse(b.Text?.Trim() ?? "", out var c) ? c : Colors.White,
+                c => b.Text = $"#{c.R:X2}{c.G:X2}{c.B:X2}",
+                buttonSize: 24)
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0),
+            };
             colorGrid.Children.Add(new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 0, 0, 6),
-                Children = { box, preview },
+                Children = { box, preview, picker },
             });
         }
 

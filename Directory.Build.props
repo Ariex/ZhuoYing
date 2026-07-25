@@ -11,7 +11,7 @@
     升级里程碑：改这里的 VersionPrefix + git tag。
   -->
   <PropertyGroup>
-    <VersionPrefix>0.4</VersionPrefix>
+    <VersionPrefix>0.5</VersionPrefix>
     <BuildEpoch>2026-01-01</BuildEpoch>
   </PropertyGroup>
 

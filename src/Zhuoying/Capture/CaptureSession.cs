@@ -33,7 +33,7 @@ public sealed class CaptureSession
     public CaptureSession(
         IReadOnlyList<MonitorInfo> monitors, MonitorInfo cursorMonitor,
         WriteableBitmap fullFrame, PixelRect virtualBounds,
-        IClipboardImage clipboard, IReadOnlyList<Color> presetColors)
+        IClipboardImage clipboard, EditorOptions options)
     {
         _clipboard = clipboard;
         _fullFrame = fullFrame;
@@ -47,7 +47,7 @@ public sealed class CaptureSession
         _selection.DragCompleted += _ => UpdateToolbar();
 
         _annotations = new AnnotationModel();
-        _editor = new EditorState(_annotations, presetColors);
+        _editor = new EditorState(_annotations, options);
 
         _window = new CaptureOverlayWindow(
             fullFrame, virtualBounds, _selection, _editor, Copy, CloseAll);
@@ -95,6 +95,28 @@ public sealed class CaptureSession
             },
         };
         el.Points.AddRange(points);
+        _annotations.Elements.Add(el);
+        _annotations.Push(new AddElementCommand(_annotations, el));
+        _annotations.Selected = el;
+    }
+
+    /// <summary>测试钩子：添加一个文字元素并选中（免注入验证文字渲染与输出合成）。</summary>
+    public void TestAddText(
+        PixelRect bounds, string text, double fontSize, double rotationDeg,
+        bool boxEnabled, double strokeThickness)
+    {
+        var el = new TextElement
+        {
+            Bounds = bounds,
+            Text = text,
+            Style = _editor.CurrentTextStyle with
+            {
+                FontSize = fontSize,
+                RotationDeg = rotationDeg,
+                BoxEnabled = boxEnabled,
+                StrokeThickness = strokeThickness,
+            },
+        };
         _annotations.Elements.Add(el);
         _annotations.Push(new AddElementCommand(_annotations, el));
         _annotations.Selected = el;

@@ -11,7 +11,14 @@ public enum EditorTool
     Shape,
     Arrow,
     Polyline,
+    Text,
 }
+
+/// <summary>编辑器会话级选项（由设置文件提供）。</summary>
+public sealed record EditorOptions(
+    IReadOnlyList<Color> PresetColors,
+    double FontSizeMin,
+    double FontSizeMax);
 
 /// <summary>
 /// 编辑器会话状态：当前工具、各工具的当前样式（新元素用）、预设颜色。
@@ -30,23 +37,34 @@ public sealed class EditorState
         EndCap = LineCapKind.SolidTriangle,
     };
     private LineStyle _polylineStyle = new();
+    private TextStyle _textStyle = new();
     // 连续修改（滑条拖动）期间的快照，结束时一次性入栈
     private (AnnotationElement Element, object State)? _continuousSnapshot;
     private bool _continuousDirty;
 
-    public EditorState(AnnotationModel model, IReadOnlyList<Color> presetColors)
+    public EditorState(AnnotationModel model, EditorOptions options)
     {
         _model = model;
-        PresetColors = presetColors;
-        if (presetColors.Count > 0)
+        PresetColors = options.PresetColors;
+        FontSizeMin = options.FontSizeMin;
+        FontSizeMax = options.FontSizeMax;
+        if (PresetColors.Count > 0)
         {
-            _currentShapeStyle = _currentShapeStyle with { Color = presetColors[0] };
-            _arrowStyle = _arrowStyle with { Color = presetColors[0] };
-            _polylineStyle = _polylineStyle with { Color = presetColors[0] };
+            _currentShapeStyle = _currentShapeStyle with { Color = PresetColors[0] };
+            _arrowStyle = _arrowStyle with { Color = PresetColors[0] };
+            _polylineStyle = _polylineStyle with { Color = PresetColors[0] };
+            _textStyle = _textStyle with { Color = PresetColors[0] };
         }
+        _textStyle = _textStyle with
+        {
+            FontSize = Math.Clamp(_textStyle.FontSize, FontSizeMin, FontSizeMax),
+        };
     }
 
     public IReadOnlyList<Color> PresetColors { get; }
+
+    public double FontSizeMin { get; }
+    public double FontSizeMax { get; }
 
     public AnnotationModel Model => _model;
 
@@ -79,6 +97,9 @@ public sealed class EditorState
         : (Tool == EditorTool.Polyline || (Tool != EditorTool.Arrow && LastLineTool == EditorTool.Polyline))
             ? _polylineStyle
             : _arrowStyle;
+
+    /// <summary>当前文字样式：选中文字元素时为其样式，否则为待创建样式。</summary>
+    public TextStyle CurrentTextStyle => (_model.Selected as TextElement)?.Style ?? _textStyle;
 
     public event Action? ToolChanged;
     public event Action? StyleChanged;
@@ -161,6 +182,32 @@ public sealed class EditorState
     public LineStyle LineStyleFor(EditorTool tool) =>
         tool == EditorTool.Polyline ? _polylineStyle : _arrowStyle;
 
+    // ---- 文字样式 ----
+
+    public void ModifyTextStyle(Func<TextStyle, TextStyle> change)
+    {
+        _textStyle = change(CurrentTextStyle);
+        if (_model.Selected is TextElement el)
+        {
+            var before = el.CaptureState();
+            el.Style = change(el.Style);
+            _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
+        }
+        StyleChanged?.Invoke();
+    }
+
+    public void ModifyTextStyleLive(Func<TextStyle, TextStyle> change)
+    {
+        _textStyle = change(CurrentTextStyle);
+        if (_model.Selected is TextElement el)
+        {
+            el.Style = change(el.Style);
+            _continuousDirty = true;
+            _model.RaiseChanged();
+        }
+        StyleChanged?.Invoke();
+    }
+
     // ---- 连续修改会话（滑条弹层）----
 
     /// <summary>连续修改开始（滑条按下/弹层打开时快照）。</summary>
@@ -199,6 +246,9 @@ public sealed class EditorState
                     _arrowStyle = line.Style;
                 else
                     _polylineStyle = line.Style;
+                break;
+            case TextElement text:
+                _textStyle = text.Style;
                 break;
             default:
                 return;

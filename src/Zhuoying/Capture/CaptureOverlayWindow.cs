@@ -21,6 +21,7 @@ public sealed class CaptureOverlayWindow : Window
     private readonly Action _requestCancel;
     private readonly EditorState _editorState;
     private readonly EditorLayer _editorLayer;
+    private readonly TextEditController _textEdit;
     private readonly EditorToolbar _toolbar;
     private PixelRect _toolbarAnchor; // 最近一次工具条停靠依据的选区
     private int _geometryChecks;
@@ -34,7 +35,12 @@ public sealed class CaptureOverlayWindow : Window
         Action requestCopy, Action requestCancel)
     {
         _virtualBounds = virtualBounds;
-        _requestCopy = requestCopy;
+        // 复制前先提交进行中的文字编辑，输出才包含最新文本
+        _requestCopy = () =>
+        {
+            _textEdit!.Commit();
+            requestCopy();
+        };
         _requestCancel = requestCancel;
         _editorState = editorState;
 
@@ -66,7 +72,14 @@ public sealed class CaptureOverlayWindow : Window
                 _requestCopy();
         };
 
-        _toolbar = new EditorToolbar(editorState, requestCopy, requestCancel);
+        // 文字就地编辑宿主（位于编辑层之上、工具条之下）
+        var textEditHost = new Canvas();
+        _textEdit = new TextEditController(
+            textEditHost, editorState.Model, editorState, virtualBounds.TopLeft, () => RenderScaling);
+        _editorLayer.CommitTextEdit = () => _textEdit.Commit();
+        _editorLayer.TextEditRequested += (el, isNew) => _textEdit.Begin(el, isNew);
+
+        _toolbar = new EditorToolbar(editorState, _requestCopy, requestCancel);
         _toolbar.Root.IsVisible = false;
         _toolbar.LayoutChanged += RepositionToolbar;
         var toolbarCanvas = new Canvas();
@@ -74,7 +87,7 @@ public sealed class CaptureOverlayWindow : Window
 
         Content = new Panel
         {
-            Children = { image, annotationLayer, selectionLayer, _editorLayer, toolbarCanvas },
+            Children = { image, annotationLayer, selectionLayer, _editorLayer, textEditHost, toolbarCanvas },
         };
 
         Opened += (_, _) => { ApplyGeometry(); PostGeometryCheck(); };
@@ -156,6 +169,17 @@ public sealed class CaptureOverlayWindow : Window
 
     private void OnKeyDownHandler(object? sender, KeyEventArgs e)
     {
+        // 文字编辑中：按键属于编辑框（含 Ctrl+Z 等），只拦 Esc 用于结束编辑
+        if (_textEdit.IsActive)
+        {
+            if (e.Key == Key.Escape)
+            {
+                _textEdit.Commit();
+                e.Handled = true;
+            }
+            return;
+        }
+
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         if (e.Key == Key.Escape)
         {
@@ -204,14 +228,30 @@ public sealed class CaptureOverlayWindow : Window
             _editorState.Tool = EditorTool.Polyline;
             e.Handled = true;
         }
+        else if (e.Key == Key.T)
+        {
+            _editorState.Tool = EditorTool.Text;
+            e.Handled = true;
+        }
     }
 
     private void OnPointerPressedHandler(object? sender, PointerPressedEventArgs e)
     {
-        // 右键 = 后退/取消：先取消进行中的绘制（如折线逐点），否则取消本次截屏
+        // 右键：结束文字编辑 → 元素上弹图层菜单 → 取消进行中的绘制 → 取消本次截屏
         if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
         {
-            if (!_editorLayer.CancelInProgress())
+            var p = e.GetPosition(this);
+            var s = RenderScaling;
+            var phys = new PixelPoint(
+                _virtualBounds.X + (int)Math.Round(p.X * s),
+                _virtualBounds.Y + (int)Math.Round(p.Y * s));
+            if (_textEdit.IsActive)
+                _textEdit.Commit();
+            else if (_editorLayer.TryShowContextMenu(phys))
+            {
+                // 菜单已弹出
+            }
+            else if (!_editorLayer.CancelInProgress())
                 _requestCancel();
             e.Handled = true;
         }

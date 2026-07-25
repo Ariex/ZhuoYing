@@ -14,16 +14,16 @@ public sealed class CaptureController
 {
     private readonly IScreenCapture _screenCapture;
     private readonly IClipboardImage _clipboard;
-    private readonly Func<IReadOnlyList<Color>> _presetColors;
+    private readonly Func<EditorOptions> _options;
     private CaptureSession? _session;
 
     public CaptureController(
         IScreenCapture screenCapture, IClipboardImage clipboard,
-        Func<IReadOnlyList<Color>> presetColors)
+        Func<EditorOptions> options)
     {
         _screenCapture = screenCapture;
         _clipboard = clipboard;
-        _presetColors = presetColors;
+        _options = options;
     }
 
     public void StartCapture()
@@ -53,7 +53,7 @@ public sealed class CaptureController
         var frame = _screenCapture.CaptureRegion(virtualBounds);
 
         var session = new CaptureSession(
-            monitors, cursorMonitor, frame, virtualBounds, _clipboard, _presetColors());
+            monitors, cursorMonitor, frame, virtualBounds, _clipboard, _options());
         session.Finished += () => _session = null;
         _session = session;
         session.Show();
@@ -64,6 +64,12 @@ public sealed class CaptureController
 
     /// <summary>测试钩子：只设定选区不复制。</summary>
     public void TestSelect(PixelRect physicalRect) => _session?.TestSelect(physicalRect);
+
+    /// <summary>测试钩子：添加一个文字标注。</summary>
+    public void TestAddText(
+        PixelRect bounds, string text, double fontSize, double rotationDeg,
+        bool boxEnabled, double strokeThickness) =>
+        _session?.TestAddText(bounds, text, fontSize, rotationDeg, boxEnabled, strokeThickness);
 
     /// <summary>测试钩子：添加一条线/箭头标注。</summary>
     public void TestAddLine(

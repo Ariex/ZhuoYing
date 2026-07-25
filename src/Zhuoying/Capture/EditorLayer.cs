@@ -32,6 +32,12 @@ public sealed class EditorLayer : Control
         Selection, // 委托给 SelectionController 的选区交互
     }
 
+    /// <summary>请求开始文字就地编辑（元素，是否新建）。由窗口接到 TextEditController。</summary>
+    public event Action<TextElement, bool>? TextEditRequested;
+
+    /// <summary>画布收到按下时先提交进行中的文字编辑（由窗口注入）。</summary>
+    public Action? CommitTextEdit { get; set; }
+
     /// <summary>圆角手柄所在的四个角（锚点系数）。</summary>
     private static readonly (double X, double Y)[] RadiusCorners = [(0, 0), (1, 0), (1, 1), (0, 1)];
 
@@ -68,7 +74,42 @@ public sealed class EditorLayer : Control
     private PixelPoint[] _dragStartPoints = [];
     private int _handleIndex;
     private bool _dragMutated;
-    private StandardCursorType _currentCursor = StandardCursorType.Cross;
+    private string _currentCursorTag = "";
+    private static Cursor? s_rotateCursor;
+    private static double s_rotateCursorScale;
+
+    /// <summary>
+    /// 旋转手柄光标：环形箭头（Windows 无内置旋转光标，运行时渲染 ↻ 生成）。
+    /// 位图按屏幕缩放渲染，尺寸与系统十字/斜拉光标一致（32 × 缩放）。
+    /// </summary>
+    private static Cursor RotateCursor(double scaling)
+    {
+        if (s_rotateCursor != null && Math.Abs(s_rotateCursorScale - scaling) < 0.01)
+            return s_rotateCursor;
+        var size = (int)Math.Round(32 * scaling);
+        var rtb = new Avalonia.Media.Imaging.RenderTargetBitmap(
+            new PixelSize(size, size), new Vector(96, 96));
+        using (var ctx = rtb.CreateDrawingContext())
+        {
+            var text = new FormattedText(
+                "↻", System.Globalization.CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold),
+                24 * scaling, Brushes.Black);
+            var origin = new Point((size - text.Width) / 2, (size - text.Height) / 2);
+            var geometry = text.BuildGeometry(origin);
+            if (geometry != null)
+            {
+                // 白描黑字，深浅背景都可辨
+                ctx.DrawGeometry(null,
+                    new Pen(Brushes.White, 3 * scaling) { LineJoin = PenLineJoin.Round }, geometry);
+                ctx.DrawGeometry(Brushes.Black, null, geometry);
+            }
+        }
+        s_rotateCursor = new Cursor(rtb, new PixelPoint(size / 2, size / 2));
+        s_rotateCursorScale = scaling;
+        return s_rotateCursor;
+    }
 
     public EditorLayer(
         EditorState state, SelectionController selection, PixelPoint origin)
@@ -111,6 +152,45 @@ public sealed class EditorLayer : Control
     }
 
     private Point ToLocal(PixelPoint physical) => ToLocal(new Point(physical.X, physical.Y));
+
+    /// <summary>
+    /// 右键落在元素上时弹出图层菜单（上移/下移/置顶/置底），弹出了返回 true；
+    /// 未命中元素返回 false（由上层执行取消逻辑）。
+    /// </summary>
+    public bool TryShowContextMenu(PixelPoint phys)
+    {
+        if (_op != Op.None || _model.HitTest(phys, 4 * Scaling) is not { } hit)
+            return false;
+        _model.Selected = hit;
+        _state.SyncStyleFromSelection();
+
+        var index = _model.Elements.IndexOf(hit);
+        var top = _model.Elements.Count - 1;
+        var flyout = new MenuFlyout();
+
+        void Add(string header, int target, bool enabled)
+        {
+            var item = new MenuItem { Header = header, IsEnabled = enabled };
+            item.Click += (_, _) =>
+            {
+                var from = _model.Elements.IndexOf(hit);
+                var to = Math.Clamp(target, 0, _model.Elements.Count - 1);
+                if (from < 0 || from == to)
+                    return;
+                _model.Elements.RemoveAt(from);
+                _model.Elements.Insert(to, hit);
+                _model.Push(new ReorderElementCommand(_model, hit, from, to));
+            };
+            flyout.Items.Add(item);
+        }
+
+        Add("上移一层", index + 1, index < top);
+        Add("下移一层", index - 1, index > 0);
+        Add("移到顶层", top, index < top);
+        Add("移到底层", 0, index > 0);
+        flyout.ShowAt(this, true);
+        return true;
+    }
 
     /// <summary>取消进行中的创建（形状拖拽/折线逐点）。取消了返回 true。</summary>
     public bool CancelInProgress()
@@ -170,6 +250,9 @@ public sealed class EditorLayer : Control
             return;
         var phys = ToPhysical(e);
         var s = Scaling;
+
+        // 点击画布任意处先提交进行中的文字编辑（点击落在编辑框内时不会到达本层）
+        CommitTextEdit?.Invoke();
 
         // 折线创建：后续点击加点/双击结束（指针不捕获，点击间自由移动）
         if (_op == Op.CreatePolyline && _liveElement is LineElement poly)
@@ -238,6 +321,25 @@ public sealed class EditorLayer : Control
                 // 不捕获指针：折线靠点击序列而非拖拽
                 break;
             }
+            case EditorTool.Text:
+            {
+                // 点击处创建默认大小文本框并立即进入编辑（TOOLS-SPEC §6）；
+                // 元素暂不入撤销栈，编辑结束时按是否为空决定 Add 或丢弃
+                var w = (int)(320 * s);
+                var h = (int)(110 * s);
+                var el = new TextElement
+                {
+                    Bounds = new PixelRect(phys.X, phys.Y, w, h),
+                    Style = _state.CurrentTextStyle with { RotationDeg = 0 },
+                };
+                _model.Elements.Add(el);
+                _model.Selected = el;
+                _state.Tool = EditorTool.Select;
+                _model.RaiseChanged();
+                TextEditRequested?.Invoke(el, true);
+                e.Handled = true;
+                return; // 不捕获指针，焦点交给编辑框
+            }
             default:
                 PressSelectTool(phys, s, e);
                 break;
@@ -248,23 +350,23 @@ public sealed class EditorLayer : Control
     private void PressSelectTool(PixelPoint phys, double s, PointerPressedEventArgs e)
     {
         _dragMutated = false;
-        if (_model.Selected is ShapeElement shape)
+        if (_model.Selected is BoxedElement boxed)
         {
             if (HitRotationHandle(phys))
             {
-                BeginElementDrag(Op.RotateElement, shape, phys, e);
+                BeginElementDrag(Op.RotateElement, boxed, phys, e);
                 return;
             }
-            if (HitRadiusHandle(phys) is var radius && radius >= 0)
+            if (boxed is ShapeElement && HitRadiusHandle(phys) is var radius && radius >= 0)
             {
                 _handleIndex = radius;
-                BeginElementDrag(Op.RadiusElement, shape, phys, e);
+                BeginElementDrag(Op.RadiusElement, boxed, phys, e);
                 return;
             }
             if (HitElementHandle(phys) is var handle && handle >= 0)
             {
                 _handleIndex = handle;
-                BeginElementDrag(Op.ResizeElement, shape, phys, e);
+                BeginElementDrag(Op.ResizeElement, boxed, phys, e);
                 return;
             }
         }
@@ -278,6 +380,13 @@ public sealed class EditorLayer : Control
         {
             _model.Selected = hit;
             _state.SyncStyleFromSelection();
+            // 文字元素：边框环带拖拽移动；内部点击进入就地编辑（纯文本框语义）
+            if (hit is TextElement text && !text.IsOnBorder(phys, 8 * s, 4 * s))
+            {
+                TextEditRequested?.Invoke(text, false);
+                e.Handled = true;
+                return;
+            }
             BeginElementDrag(hit is LineElement ? Op.MoveLine : Op.MoveElement, hit, phys, e);
             return;
         }
@@ -294,8 +403,8 @@ public sealed class EditorLayer : Control
         _liveElement = el;
         _dragStart = phys;
         _dragBeforeState = el.CaptureState();
-        if (el is ShapeElement shape)
-            _dragStartBounds = shape.Bounds;
+        if (el is BoxedElement boxed)
+            _dragStartBounds = boxed.Bounds;
         if (el is LineElement line)
             _dragStartPoints = line.Points.ToArray();
         e.Pointer.Capture(this);
@@ -322,19 +431,19 @@ public sealed class EditorLayer : Control
                 poly.Points[^1] = phys; // 预览段跟随
                 _model.RaiseChanged();
                 break;
-            case Op.ResizeElement when _liveElement is ShapeElement rs:
+            case Op.ResizeElement when _liveElement is BoxedElement rs:
             {
                 var center = new Point(
                     _dragStartBounds.X + _dragStartBounds.Width / 2.0,
                     _dragStartBounds.Y + _dragStartBounds.Height / 2.0);
-                var lp = ShapeElement.RotatePoint(
-                    new Point(phys.X, phys.Y), center, -rs.Style.RotationDeg);
+                var lp = BoxedElement.RotatePoint(
+                    new Point(phys.X, phys.Y), center, -rs.RotationDeg);
                 rs.Bounds = ResizeByHandle(lp);
                 _dragMutated = true;
                 _model.RaiseChanged();
                 break;
             }
-            case Op.MoveElement when _liveElement is ShapeElement ms:
+            case Op.MoveElement when _liveElement is BoxedElement ms:
                 ms.Bounds = new PixelRect(
                     new PixelPoint(
                         _dragStartBounds.X + (phys.X - _dragStart.X),
@@ -355,7 +464,7 @@ public sealed class EditorLayer : Control
                 _state.SyncStyleFromSelection();
                 break;
             }
-            case Op.RotateElement when _liveElement is ShapeElement rots:
+            case Op.RotateElement when _liveElement is BoxedElement rots:
             {
                 var c = rots.Center;
                 // 手柄位于元素上方（未旋转时朝向 -90°），故角度需 +90°
@@ -365,7 +474,7 @@ public sealed class EditorLayer : Control
                 deg = Math.Round(deg);
                 while (deg > 180) deg -= 360;
                 while (deg < -180) deg += 360;
-                rots.Style = rots.Style with { RotationDeg = deg };
+                rots.RotationDeg = deg;
                 _dragMutated = true;
                 _model.RaiseChanged();
                 _state.SyncStyleFromSelection();
@@ -515,17 +624,17 @@ public sealed class EditorLayer : Control
 
     // ---- 命中测试 ----
 
-    /// <returns>选中形状被命中的缩放手柄下标，未命中 -1。</returns>
+    /// <returns>选中盒状元素被命中的缩放手柄下标，未命中 -1。</returns>
     private int HitElementHandle(PixelPoint pos)
     {
-        if (_model.Selected is not ShapeElement el)
+        if (_model.Selected is not BoxedElement el)
             return -1;
         var hit = SelectionMetrics.HandleHitRadius * Scaling;
         for (var i = 0; i < SelectionController.HandleAnchors.Length; i++)
         {
             var (ax, ay) = SelectionController.HandleAnchors[i];
             var p = new Point(el.Bounds.X + ax * el.Bounds.Width, el.Bounds.Y + ay * el.Bounds.Height);
-            var c = ShapeElement.RotatePoint(p, el.Center, el.Style.RotationDeg);
+            var c = BoxedElement.RotatePoint(p, el.Center, el.RotationDeg);
             if (Math.Abs(pos.X - c.X) <= hit && Math.Abs(pos.Y - c.Y) <= hit)
                 return i;
         }
@@ -540,8 +649,8 @@ public sealed class EditorLayer : Control
         var hit = SelectionMetrics.HandleHitRadius * Scaling;
         for (var i = 0; i < RadiusCorners.Length; i++)
         {
-            var c = ShapeElement.RotatePoint(
-                RadiusHandleCenterUnrotated(el, i), el.Center, el.Style.RotationDeg);
+            var c = BoxedElement.RotatePoint(
+                RadiusHandleCenterUnrotated(el, i), el.Center, el.RotationDeg);
             if (Math.Abs(pos.X - c.X) <= hit && Math.Abs(pos.Y - c.Y) <= hit)
                 return i;
         }
@@ -550,11 +659,11 @@ public sealed class EditorLayer : Control
 
     private bool HitRotationHandle(PixelPoint pos)
     {
-        if (_model.Selected is not ShapeElement el)
+        if (_model.Selected is not BoxedElement el)
             return false;
         var hit = SelectionMetrics.HandleHitRadius * Scaling;
-        var c = ShapeElement.RotatePoint(
-            RotationHandleCenterUnrotated(el), el.Center, el.Style.RotationDeg);
+        var c = BoxedElement.RotatePoint(
+            RotationHandleCenterUnrotated(el), el.Center, el.RotationDeg);
         return Math.Abs(pos.X - c.X) <= hit && Math.Abs(pos.Y - c.Y) <= hit;
     }
 
@@ -593,12 +702,19 @@ public sealed class EditorLayer : Control
     }
 
     /// <summary>旋转手柄中心（未旋转坐标系）：包围盒上边中点上方。</summary>
-    private Point RotationHandleCenterUnrotated(ShapeElement el) => new(
+    private Point RotationHandleCenterUnrotated(BoxedElement el) => new(
         el.Bounds.X + el.Bounds.Width / 2.0,
         el.Bounds.Y - RotationHandleOffset * Scaling);
 
     private void UpdateCursor(PixelPoint phys)
     {
+        // 旋转手柄用自定义环形箭头光标，其余为标准光标
+        if (_state.Tool == EditorTool.Select && HitRotationHandle(phys))
+        {
+            SetCursor("rotate", null);
+            return;
+        }
+
         StandardCursorType type;
         if (_state.Tool is EditorTool.Shape or EditorTool.Arrow or EditorTool.Polyline)
         {
@@ -608,7 +724,7 @@ public sealed class EditorLayer : Control
         {
             type = StandardCursorType.Cross; // 线端点/控制点：十字
         }
-        else if (HitRotationHandle(phys) || HitRadiusHandle(phys) >= 0)
+        else if (HitRadiusHandle(phys) >= 0)
         {
             type = StandardCursorType.Hand;
         }
@@ -616,9 +732,12 @@ public sealed class EditorLayer : Control
         {
             type = HandleCursors[h];
         }
-        else if (_model.HitTest(phys, 4 * Scaling) != null)
+        else if (_model.HitTest(phys, 4 * Scaling) is { } hover)
         {
-            type = StandardCursorType.SizeAll;
+            // 文字元素内部为文本光标（点击进入编辑），边框环带为移动
+            type = hover is TextElement text && !text.IsOnBorder(phys, 8 * Scaling, 4 * Scaling)
+                ? StandardCursorType.Ibeam
+                : StandardCursorType.SizeAll;
         }
         else
         {
@@ -629,10 +748,15 @@ public sealed class EditorLayer : Control
                     ? StandardCursorType.SizeAll
                     : StandardCursorType.Cross;
         }
-        if (type == _currentCursor)
+        SetCursor(type.ToString(), type);
+    }
+
+    private void SetCursor(string tag, StandardCursorType? type)
+    {
+        if (tag == _currentCursorTag)
             return;
-        _currentCursor = type;
-        Cursor = new Cursor(type);
+        _currentCursorTag = tag;
+        Cursor = type is { } t ? new Cursor(t) : RotateCursor(Scaling);
     }
 
     public override void Render(DrawingContext context)
@@ -645,8 +769,9 @@ public sealed class EditorLayer : Control
 
         switch (_model.Selected)
         {
-            case ShapeElement shape:
-                RenderShapeHandles(context, shape);
+            // 文字编辑中也保持显示选中框与手柄（用户要求文本框常显）
+            case BoxedElement boxed:
+                RenderBoxedHandles(context, boxed);
                 break;
             case LineElement line:
                 RenderLineHandles(context, line);
@@ -654,13 +779,13 @@ public sealed class EditorLayer : Control
         }
     }
 
-    private void RenderShapeHandles(DrawingContext context, ShapeElement el)
+    private void RenderBoxedHandles(DrawingContext context, BoxedElement el)
     {
         var local = ToLocal(el.Bounds);
         const double hs = SelectionMetrics.HandleSize;
 
         // 所有手柄都画在旋转后的坐标系里（与元素同步旋转）
-        using (context.PushTransform(ShapeElement.RotationMatrix(local.Center, el.Style.RotationDeg)))
+        using (context.PushTransform(BoxedElement.RotationMatrix(local.Center, el.RotationDeg)))
         {
             context.DrawRectangle(null, SelectionOutlinePen, local);
 
@@ -677,11 +802,14 @@ public sealed class EditorLayer : Control
                     new Rect(c.X - hs / 2, c.Y - hs / 2, hs, hs), 1.5, 1.5);
             }
 
-            // 4 个圆角手柄（圆形，橙色描边）
-            for (var i = 0; i < RadiusCorners.Length; i++)
+            // 4 个圆角手柄（圆形，橙色描边，仅形状）
+            if (el is ShapeElement shape)
             {
-                var c = ToLocal(RadiusHandleCenterUnrotated(el, i));
-                context.DrawEllipse(Brushes.White, RadiusHandlePen, c, hs / 2, hs / 2);
+                for (var i = 0; i < RadiusCorners.Length; i++)
+                {
+                    var c = ToLocal(RadiusHandleCenterUnrotated(shape, i));
+                    context.DrawEllipse(Brushes.White, RadiusHandlePen, c, hs / 2, hs / 2);
+                }
             }
         }
     }

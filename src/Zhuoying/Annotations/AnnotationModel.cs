@@ -116,3 +116,18 @@ public sealed class MutateElementCommand(
 
     public void Redo() => element.RestoreState(after);
 }
+
+/// <summary>调整元素叠放层级（列表序 = 叠放序，靠后在上；构造前已移动到 newIndex）。</summary>
+public sealed class ReorderElementCommand(
+    AnnotationModel model, AnnotationElement element, int oldIndex, int newIndex) : IEditCommand
+{
+    public void Undo() => Move(oldIndex);
+
+    public void Redo() => Move(newIndex);
+
+    private void Move(int index)
+    {
+        model.Elements.Remove(element);
+        model.Elements.Insert(Math.Clamp(index, 0, model.Elements.Count), element);
+    }
+}

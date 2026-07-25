@@ -34,7 +34,11 @@ public partial class App : Application
             _appSettings = _settingsService.Load();
 
             _captureController = new CaptureController(
-                new WindowsScreenCapture(), new WindowsClipboardImage(), GetAnnotationColors);
+                new WindowsScreenCapture(), new WindowsClipboardImage(),
+                () => new Zhuoying.Capture.EditorOptions(
+                    GetAnnotationColors(),
+                    Math.Max(1, _appSettings.FontSizeMin),
+                    Math.Max(_appSettings.FontSizeMin, _appSettings.FontSizeMax)));
 
             _hotkey = new WindowsHotkeyService();
             TryApplyHotkey(_appSettings.Hotkey);
@@ -51,6 +55,7 @@ public partial class App : Application
             SetupTestRectHook(args, "--test-select", r => _captureController!.TestSelect(r));
             SetupTestShapeHook(args);
             SetupTestLineHook(args);
+            SetupTestTextHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -136,6 +141,29 @@ public partial class App : Application
         DispatcherTimer.RunOnce(
             () => _captureController!.TestAddLine(
                 points, startCap, endCap, startT, endT, spline, lineStyle, opacity),
+            TimeSpan.FromMilliseconds(2200));
+    }
+
+    /// <summary>解析 `--test-text "x:y:w:h:字号:旋转:外框0/1:描边粗|文本"`：2.2s 时添加文字标注。</summary>
+    private void SetupTestTextHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-text");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var raw = args[index + 1];
+        var sep = raw.IndexOf('|');
+        // 命令行参数在空格处会被切开，文本里用 %20 表示空格、%0A 表示换行
+        var text = (sep >= 0 ? raw[(sep + 1)..] : "测试文字")
+            .Replace("%20", " ").Replace("%0A", "\n");
+        var p = (sep >= 0 ? raw[..sep] : raw).Split(':');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+        var size = p.Length > 4 ? double.Parse(p[4]) : 28;
+        var rotation = p.Length > 5 ? double.Parse(p[5]) : 0;
+        var boxed = p.Length > 6 && p[6] == "1";
+        var stroke = p.Length > 7 ? double.Parse(p[7]) : 0;
+        DispatcherTimer.RunOnce(
+            () => _captureController!.TestAddText(rect, text, size, rotation, boxed, stroke),
             TimeSpan.FromMilliseconds(2200));
     }
 

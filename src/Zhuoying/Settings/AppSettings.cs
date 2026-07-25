@@ -13,6 +13,11 @@ public sealed class AppSettings
     /// <summary>标注预设颜色（#RRGGBB，最多 10 个）。默认：红黄绿蓝黑白。</summary>
     public System.Collections.Generic.List<string> AnnotationColors { get; set; } = DefaultAnnotationColors();
 
+    /// <summary>文字工具字号范围（物理像素，直接改本文件生效）。</summary>
+    public double FontSizeMin { get; set; } = 9;
+
+    public double FontSizeMax { get; set; } = 100;
+
     public static System.Collections.Generic.List<string> DefaultAnnotationColors() =>
         ["#FF3B30", "#FFCC00", "#34C759", "#0A84FF", "#000000", "#FFFFFF"];
 }

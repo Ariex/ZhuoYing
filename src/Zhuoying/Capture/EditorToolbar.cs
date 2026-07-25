@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Avalonia;
 using Avalonia.Collections;
 using Avalonia.Controls;
@@ -32,6 +33,7 @@ public sealed class EditorToolbar
     private readonly Button _selectButton;
     private readonly Button _shapeButton;
     private readonly Button _lineToolButton;
+    private readonly Button _textToolButton;
     private readonly Button _undoButton;
     private readonly Button _redoButton;
     private readonly StackPanel _propertyRow;
@@ -51,6 +53,15 @@ public sealed class EditorToolbar
     private readonly TextBlock _endThickText;
     private readonly TextBlock _lineOpacityText;
     private readonly StackPanel _lineSwatchPanel;
+    private readonly StackPanel _textPropertyRow;
+    private readonly TextBlock _fontNameText;
+    private readonly TextBlock _fontSizeText;
+    private readonly Button _boldButton;
+    private readonly Button _italicButton;
+    private readonly Button _halignButton;
+    private readonly Button _valignButton;
+    private readonly StackPanel _textSwatchPanel;
+    private static string[]? _systemFonts;
 
     public Border Root { get; }
 
@@ -67,6 +78,7 @@ public sealed class EditorToolbar
         _lineToolButton = ToolButton(ArrowIcon(), "箭头/折线 (A / L)",
             () => _state.Tool = _state.LastLineTool);
         var lineToolHost = AttachLineToolPopup(_lineToolButton);
+        _textToolButton = ToolButton(GlyphIcon("T"), "文字 (T)", () => _state.Tool = EditorTool.Text);
         _undoButton = ToolButton(GlyphIcon("↶"), "撤销 (Ctrl+Z)", () => _model.Undo());
         _redoButton = ToolButton(GlyphIcon("↷"), "重做 (Ctrl+Y)", () => _model.Redo());
         var copyButton = ToolButton(CopyIcon(), "复制 (Enter)", copy);
@@ -78,7 +90,7 @@ public sealed class EditorToolbar
             Spacing = 2,
             Children =
             {
-                _selectButton, _shapeButton, lineToolHost, Separator(),
+                _selectButton, _shapeButton, lineToolHost, _textToolButton, Separator(),
                 _undoButton, _redoButton, Separator(),
                 copyButton, cancelButton,
             },
@@ -128,6 +140,13 @@ public sealed class EditorToolbar
             setLive: v => _state.ModifyStyleLive(s => s with { Opacity = Math.Round(v) }));
 
         _swatchPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var shapeColorPick = new ColorPickButton(
+            () => _state.CurrentStyle.Color,
+            c => _state.ModifyStyleLive(s => s with { Color = c }),
+            _state.BeginContinuousStyle, _state.EndContinuousStyle)
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+        };
 
         _propertyRow = new StackPanel
         {
@@ -136,7 +155,7 @@ public sealed class EditorToolbar
             Children =
             {
                 _fillCheck, shapeDashHost, thicknessButton, radiusButton, rotationButton, opacityButton,
-                Separator(), _swatchPanel,
+                Separator(), _swatchPanel, shapeColorPick,
             },
         };
 
@@ -194,6 +213,13 @@ public sealed class EditorToolbar
             setLive: v => _state.ModifyLineStyleLive(s => s with { Opacity = Math.Round(v) }));
 
         _lineSwatchPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var lineColorPick = new ColorPickButton(
+            () => _state.CurrentLineStyle.Color,
+            c => _state.ModifyLineStyleLive(s => s with { Color = c }),
+            _state.BeginContinuousStyle, _state.EndContinuousStyle)
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+        };
 
         _linePropertyRow = new StackPanel
         {
@@ -203,7 +229,73 @@ public sealed class EditorToolbar
             {
                 lineDashHost, startCapHost, endCapHost,
                 startThickButton, endThickButton, _splineCheck, lineOpacityButton,
-                Separator(), _lineSwatchPanel,
+                Separator(), _lineSwatchPanel, lineColorPick,
+            },
+        };
+
+        // ---- 文字属性行 ----
+
+        _fontNameText = new TextBlock
+        {
+            FontSize = 12,
+            MaxWidth = 96,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var fontButton = FontListButton();
+
+        _fontSizeText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 20 };
+        var fontSizeButton = SliderPopupButton(
+            GlyphIcon("A"), _fontSizeText, "字号",
+            min: _state.FontSizeMin, max: _state.FontSizeMax,
+            get: () => _state.CurrentTextStyle.FontSize,
+            setLive: v => _state.ModifyTextStyleLive(s => s with { FontSize = Math.Round(v) }));
+
+        _boldButton = ToolButton(new TextBlock
+        {
+            Text = "B", FontWeight = FontWeight.Bold, FontSize = 15,
+            Foreground = new SolidColorBrush(IconColor),
+        }, "加粗", () => _state.ModifyTextStyle(s => s with { Bold = !s.Bold }));
+        _boldButton.Width = 30;
+        _boldButton.Height = 30;
+        _italicButton = ToolButton(new TextBlock
+        {
+            Text = "I", FontStyle = FontStyle.Italic, FontSize = 15,
+            Foreground = new SolidColorBrush(IconColor),
+        }, "斜体", () => _state.ModifyTextStyle(s => s with { Italic = !s.Italic }));
+        _italicButton.Width = 30;
+        _italicButton.Height = 30;
+
+        var halignHost = PaletteButton(
+            () => (int)_state.CurrentTextStyle.HAlign,
+            i => _state.ModifyTextStyle(s => s with { HAlign = (TextHAlign)i }),
+            3, i => AlignIcon(horizontal: true, i), out _halignButton);
+        var valignHost = PaletteButton(
+            () => (int)_state.CurrentTextStyle.VAlign,
+            i => _state.ModifyTextStyle(s => s with { VAlign = (TextVAlign)i }),
+            3, i => AlignIcon(horizontal: false, i), out _valignButton);
+
+        var boxSubmenu = SubmenuButton("文本框", BuildBoxSubmenu);
+        var strokeSubmenu = SubmenuButton("描边", BuildStrokeSubmenu);
+
+        _textSwatchPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var textColorPick = new ColorPickButton(
+            () => _state.CurrentTextStyle.Color,
+            c => _state.ModifyTextStyleLive(s => s with { Color = c }),
+            _state.BeginContinuousStyle, _state.EndContinuousStyle)
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        _textPropertyRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
+            {
+                fontButton, fontSizeButton, _boldButton, _italicButton,
+                halignHost, valignHost, boxSubmenu, strokeSubmenu,
+                Separator(), _textSwatchPanel, textColorPick,
             },
         };
 
@@ -217,7 +309,7 @@ public sealed class EditorToolbar
             Child = new StackPanel
             {
                 Spacing = 4,
-                Children = { toolRow, _propertyRow, _linePropertyRow },
+                Children = { toolRow, _propertyRow, _linePropertyRow, _textPropertyRow },
             },
         };
 
@@ -243,21 +335,26 @@ public sealed class EditorToolbar
                     ? ActiveBackground : Colors.Transparent);
             _lineToolButton.Content = _state.LastLineTool == EditorTool.Polyline
                 ? PolylineIcon() : ArrowIcon();
+            _textToolButton.Background = new SolidColorBrush(
+                _state.Tool == EditorTool.Text ? ActiveBackground : Colors.Transparent);
             _undoButton.IsEnabled = _model.CanUndo;
             _redoButton.IsEnabled = _model.CanRedo;
 
             var showShapeProps = _state.Tool == EditorTool.Shape || _model.Selected is ShapeElement;
             var showLineProps = _state.Tool is EditorTool.Arrow or EditorTool.Polyline
                                 || _model.Selected is LineElement;
+            var showTextProps = _state.Tool == EditorTool.Text || _model.Selected is TextElement;
             // 弧线只对折线有意义（箭头固定两点，样条无效果）
             var showSpline = _state.Tool == EditorTool.Polyline
                              || (_model.Selected is LineElement { IsArrowTool: false });
             if (_propertyRow.IsVisible != showShapeProps
                 || _linePropertyRow.IsVisible != showLineProps
+                || _textPropertyRow.IsVisible != showTextProps
                 || _splineCheck.IsVisible != showSpline)
             {
                 _propertyRow.IsVisible = showShapeProps;
                 _linePropertyRow.IsVisible = showLineProps;
+                _textPropertyRow.IsVisible = showTextProps;
                 _splineCheck.IsVisible = showSpline;
                 LayoutChanged?.Invoke();
             }
@@ -281,6 +378,18 @@ public sealed class EditorToolbar
             _lineOpacityText.Text = ((int)lineStyle.Opacity).ToString();
             RefreshSwatches(_lineSwatchPanel, lineStyle.Color,
                 c => _state.ModifyLineStyle(s => s with { Color = c }));
+
+            var textStyle = _state.CurrentTextStyle;
+            _fontNameText.Text = textStyle.FontFamily;
+            _fontSizeText.Text = ((int)textStyle.FontSize).ToString();
+            _boldButton.Background = new SolidColorBrush(
+                textStyle.Bold ? ActiveBackground : Colors.Transparent);
+            _italicButton.Background = new SolidColorBrush(
+                textStyle.Italic ? ActiveBackground : Colors.Transparent);
+            _halignButton.Content = WithChevron(AlignIcon(horizontal: true, (int)textStyle.HAlign));
+            _valignButton.Content = WithChevron(AlignIcon(horizontal: false, (int)textStyle.VAlign));
+            RefreshSwatches(_textSwatchPanel, textStyle.Color,
+                c => _state.ModifyTextStyle(s => s with { Color = c }));
         }
         finally
         {
@@ -590,6 +699,327 @@ public sealed class EditorToolbar
         btn.Click += (_, _) => Open();
         button = btn;
         return new Panel { Children = { btn, popup } };
+    }
+
+    /// <summary>字体选择按钮：弹出可滚动字体名列表（约 10 项可见，不做字体预览）。</summary>
+    private Control FontListButton()
+    {
+        var button = new Button
+        {
+            Height = 30,
+            Padding = new Thickness(6, 0),
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(5),
+            Content = WithChevron(_fontNameText),
+        };
+        AddStateBackground(button, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+        AddStateBackground(button, ":pressed", Color.FromRgb(0xD4, 0xD4, 0xD4));
+
+        var content = new Border
+        {
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(4),
+            BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
+            Cursor = new Cursor(StandardCursorType.Arrow),
+        };
+        var popup = new Popup
+        {
+            PlacementTarget = button,
+            Placement = PlacementMode.Bottom,
+            VerticalOffset = 2,
+            IsLightDismissEnabled = false,
+            Child = content,
+        };
+
+        void WatchClose() => DispatcherTimer.RunOnce(() =>
+        {
+            if (!popup.IsOpen)
+                return;
+            if (button.IsPointerOver || content.IsPointerOver)
+            {
+                WatchClose();
+                return;
+            }
+            popup.IsOpen = false;
+        }, TimeSpan.FromMilliseconds(300));
+
+        void Open()
+        {
+            if (popup.IsOpen)
+                return;
+            _systemFonts ??= FontManager.Current.SystemFonts
+                .Select(f => f.Name)
+                .Where(n => n.Length > 0)
+                .Distinct()
+                .OrderBy(n => n, StringComparer.CurrentCulture)
+                .ToArray();
+            var list = new ListBox
+            {
+                ItemsSource = _systemFonts,
+                SelectedItem = _state.CurrentTextStyle.FontFamily,
+                Width = 230,
+                MaxHeight = 320, // 约 10 项，其余滚动
+                FontSize = 13,
+            };
+            list.SelectionChanged += (_, _) =>
+            {
+                if (list.SelectedItem is string name && name != _state.CurrentTextStyle.FontFamily)
+                {
+                    _state.ModifyTextStyle(s => s with { FontFamily = name });
+                    popup.IsOpen = false;
+                }
+            };
+            content.Child = list;
+            popup.IsOpen = true;
+            Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => list.ScrollIntoView(list.SelectedItem!), DispatcherPriority.Background);
+            WatchClose();
+        }
+
+        button.PointerEntered += (_, _) => Open();
+        button.Click += (_, _) => Open();
+        return new Panel { Children = { button, popup } };
+    }
+
+    /// <summary>子菜单按钮（外框/描边）：悬浮弹出面板，打开时重建内容以同步当前值；
+    /// 面板内滑条走连续修改会话（打开快照、关闭合并入撤销栈）。</summary>
+    private Control SubmenuButton(string label, Func<Control> buildContent)
+    {
+        var button = new Button
+        {
+            Height = 30,
+            Padding = new Thickness(8, 0),
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(5),
+            Content = WithChevron(new TextBlock
+            {
+                Text = label,
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+            }),
+        };
+        AddStateBackground(button, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+        AddStateBackground(button, ":pressed", Color.FromRgb(0xD4, 0xD4, 0xD4));
+
+        var content = new Border
+        {
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 8),
+            BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
+            Cursor = new Cursor(StandardCursorType.Arrow),
+        };
+        var popup = new Popup
+        {
+            PlacementTarget = button,
+            Placement = PlacementMode.Bottom,
+            VerticalOffset = 2,
+            IsLightDismissEnabled = false,
+            Child = content,
+        };
+
+        void Close()
+        {
+            if (!popup.IsOpen)
+                return;
+            popup.IsOpen = false;
+            _state.EndContinuousStyle();
+        }
+
+        void WatchClose() => DispatcherTimer.RunOnce(() =>
+        {
+            if (!popup.IsOpen)
+                return;
+            // 嵌套的取色弹层打开时（独立视觉根，IsPointerOver 探不到）保持子菜单不关
+            if (button.IsPointerOver || content.IsPointerOver || ColorPickButton.AnyOpen)
+            {
+                WatchClose();
+                return;
+            }
+            Close();
+        }, TimeSpan.FromMilliseconds(300));
+
+        void Open()
+        {
+            if (popup.IsOpen)
+                return;
+            _state.BeginContinuousStyle();
+            content.Child = buildContent();
+            popup.IsOpen = true;
+            WatchClose();
+        }
+
+        button.PointerEntered += (_, _) => Open();
+        button.Click += (_, _) => Open();
+        return new Panel { Children = { button, popup } };
+    }
+
+    /// <summary>子菜单里的一行滑条（标签 + MiniSlider + 数值）。</summary>
+    private static Control SliderRow(
+        string label, double min, double max, double value, Action<double> setLive)
+    {
+        var slider = new MiniSlider { Minimum = min, Maximum = max, Width = 120, Value = value };
+        var text = new TextBlock
+        {
+            Text = ((int)value).ToString(),
+            FontSize = 12,
+            MinWidth = 24,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        slider.ValueChanged += v =>
+        {
+            text.Text = ((int)v).ToString();
+            setLive(v);
+        };
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = label, FontSize = 12, Width = 52,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+                slider, text,
+            },
+        };
+    }
+
+    /// <summary>子菜单里的一行色板（标签 + 预设色小方块 + 自定义取色）。</summary>
+    private Control ColorRow(string label, Func<Color> get, Action<Color> pick, Action<Color> pickLive)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
+        var current = get();
+        foreach (var color in _state.PresetColors)
+        {
+            var c = color;
+            var b = new Button
+            {
+                Padding = new Thickness(0),
+                Background = Brushes.Transparent,
+                Content = RingedSwatch(c, ringed: c == current, size: 13),
+            };
+            b.Click += (_, _) => pick(c);
+            row.Children.Add(b);
+        }
+        // 子菜单本身已运行连续修改会话，取色器不再嵌套开启（Live 修改置脏、关闭时合并入栈）
+        row.Children.Add(new ColorPickButton(get, pickLive, buttonSize: 22)
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = label, FontSize = 12, Width = 52,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+                row,
+            },
+        };
+    }
+
+    private Control BuildBoxSubmenu()
+    {
+        var style = _state.CurrentTextStyle;
+        var enable = new CheckBox { Content = "填充文本框", FontSize = 12, IsChecked = style.BoxEnabled };
+        enable.IsCheckedChanged += (_, _) =>
+        {
+            var on = enable.IsChecked == true;
+            _state.ModifyTextStyle(s => s with { BoxEnabled = on });
+        };
+        return new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                enable,
+                ColorRow("颜色", () => _state.CurrentTextStyle.BoxColor,
+                    c => _state.ModifyTextStyle(s => s with { BoxColor = c, BoxEnabled = true }),
+                    c => _state.ModifyTextStyleLive(s => s with { BoxColor = c, BoxEnabled = true })),
+                SliderRow("圆角", 0, 100, style.BoxRadiusPercent,
+                    v => _state.ModifyTextStyleLive(s => s with { BoxRadiusPercent = Math.Round(v) })),
+                SliderRow("透明度", 0, 100, style.BoxOpacity,
+                    v => _state.ModifyTextStyleLive(s => s with { BoxOpacity = Math.Round(v) })),
+                SliderRow("内边距", 0, 60, style.Padding,
+                    v => _state.ModifyTextStyleLive(s => s with { Padding = Math.Round(v) })),
+            },
+        };
+    }
+
+    private Control BuildStrokeSubmenu()
+    {
+        var style = _state.CurrentTextStyle;
+        return new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                ColorRow("颜色", () => _state.CurrentTextStyle.StrokeColor,
+                    c => _state.ModifyTextStyle(s => s with { StrokeColor = c }),
+                    c => _state.ModifyTextStyleLive(s => s with { StrokeColor = c })),
+                SliderRow("粗细", 0, 20, style.StrokeThickness,
+                    v => _state.ModifyTextStyleLive(s => s with { StrokeThickness = Math.Round(v) })),
+                SliderRow("透明度", 0, 100, style.StrokeOpacity,
+                    v => _state.ModifyTextStyleLive(s => s with { StrokeOpacity = Math.Round(v) })),
+                new TextBlock
+                {
+                    Text = "粗细 0 = 无描边",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
+                },
+            },
+        };
+    }
+
+    /// <summary>对齐图标：三条线按左/中/右（或上/中/下）对齐。</summary>
+    private static Control AlignIcon(bool horizontal, int index)
+    {
+        var canvas = new Canvas { Width = 18, Height = 16 };
+        double[] lens = [12, 8, 12];
+        for (var i = 0; i < 3; i++)
+        {
+            var len = lens[i];
+            var bar = new Avalonia.Controls.Shapes.Rectangle
+            {
+                Fill = new SolidColorBrush(IconColor),
+                RadiusX = 1, RadiusY = 1,
+            };
+            if (horizontal)
+            {
+                bar.Width = len;
+                bar.Height = 2;
+                Canvas.SetTop(bar, 3 + i * 4);
+                Canvas.SetLeft(bar, index switch
+                {
+                    1 => (18 - len) / 2,   // 居中
+                    2 => 16 - len,         // 右
+                    _ => 2,                // 左
+                });
+            }
+            else
+            {
+                bar.Width = 2;
+                bar.Height = len;
+                Canvas.SetLeft(bar, 3 + i * 4);
+                Canvas.SetTop(bar, index switch
+                {
+                    1 => (16 - len) / 2,   // 居中
+                    2 => 14 - len,         // 下
+                    _ => 2,                // 上
+                });
+            }
+            canvas.Children.Add(bar);
+        }
+        return canvas;
     }
 
     /// <summary>当前项预览 + 下拉指示小箭头。</summary>
