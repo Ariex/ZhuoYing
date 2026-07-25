@@ -30,11 +30,11 @@ public partial class App : Application
             // 无主窗口，驻留托盘（REQUIREMENTS §3）
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
-            _captureController = new CaptureController(
-                new WindowsScreenCapture(), new WindowsClipboardImage());
-
             _settingsService = new SettingsService();
             _appSettings = _settingsService.Load();
+
+            _captureController = new CaptureController(
+                new WindowsScreenCapture(), new WindowsClipboardImage(), GetAnnotationColors);
 
             _hotkey = new WindowsHotkeyService();
             TryApplyHotkey(_appSettings.Hotkey);
@@ -49,6 +49,7 @@ public partial class App : Application
                     TimeSpan.FromMilliseconds(1500));
             SetupTestRectHook(args, "--test-copy", r => _captureController!.TestCopy(r));
             SetupTestRectHook(args, "--test-select", r => _captureController!.TestSelect(r));
+            SetupTestShapeHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -68,6 +69,44 @@ public partial class App : Application
         DispatcherTimer.RunOnce(() => _captureController!.StartCapture(),
             TimeSpan.FromMilliseconds(1500));
         DispatcherTimer.RunOnce(() => action(rect), TimeSpan.FromMilliseconds(3000));
+    }
+
+    /// <summary>解析标注预设颜色（settings.json，非法项跳过，空则回落默认）。</summary>
+    private System.Collections.Generic.IReadOnlyList<Avalonia.Media.Color> GetAnnotationColors()
+    {
+        var result = new System.Collections.Generic.List<Avalonia.Media.Color>();
+        foreach (var hex in _appSettings.AnnotationColors)
+        {
+            if (result.Count >= AppSettings.MaxAnnotationColors)
+                break;
+            if (Avalonia.Media.Color.TryParse(hex, out var color))
+                result.Add(color);
+        }
+        if (result.Count == 0)
+            foreach (var hex in AppSettings.DefaultAnnotationColors())
+                result.Add(Avalonia.Media.Color.Parse(hex));
+        return result;
+    }
+
+    /// <summary>解析 `--test-shape x,y,w,h[,radius%[,filled(0/1)[,thickness[,rotation°]]]]`：2.2s 时添加形状标注。</summary>
+    private void SetupTestShapeHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-shape");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var p = args[index + 1].Split(',');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+        var radius = p.Length > 4 ? double.Parse(p[4]) : 0;
+        var filled = p.Length > 5 && p[5] == "1";
+        var thickness = p.Length > 6 ? double.Parse(p[6]) : 10;
+        var rotation = p.Length > 7 ? double.Parse(p[7]) : 0;
+        var lineStyle = p.Length > 8 ? int.Parse(p[8]) : 0;
+        var opacity = p.Length > 9 ? double.Parse(p[9]) : 100;
+        DispatcherTimer.RunOnce(
+            () => _captureController!.TestAddShape(
+                rect, radius, filled, thickness, rotation, lineStyle, opacity),
+            TimeSpan.FromMilliseconds(2200));
     }
 
     /// <summary>注册（或改绑）截屏热键并同步托盘提示文案。</summary>
@@ -95,10 +134,12 @@ public partial class App : Application
         }
         _settingsWindow = new SettingsWindow(
             _appSettings.Hotkey,
+            _appSettings.AnnotationColors,
             TryApplyHotkey,
-            hotkey =>
+            (hotkey, colors) =>
             {
                 _appSettings.Hotkey = hotkey;
+                _appSettings.AnnotationColors = colors;
                 _settingsService!.Save(_appSettings);
             });
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;

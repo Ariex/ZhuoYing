@@ -12,12 +12,15 @@ Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原�
 - **拖拽框选**：实时显示物理像素尺寸；选区外按下即扩展选区到该点
 - **复制到剪贴板**：选区右下角工具条按钮 / `Enter` / `Ctrl+C` / 双击选区；
   输出为 100% 物理分辨率的 CF_DIB（携带来源屏幕 DPI），高分屏粘贴不缩小、不模糊
+- **标注：形状工具**（快捷键 S）：矩形，圆角 0–100% 可调（100% = 椭圆），
+  8 缩放手柄 + 4 圆角手柄；颜色（预设可改）/ 填充 / 线形（5 种，易扩充）/
+  粗细（1–100px）；撤销/重做（Ctrl+Z / Ctrl+Y）；复制时标注按物理像素合成到输出
 - **托盘驻留**：无主窗口，托盘菜单提供 截屏 / 设置 / 退出；单实例运行
-- **设置**：修改截屏快捷键（持久化到 `%AppData%\Zhuoying\settings.json`）
+- **设置**：修改截屏快捷键、标注预设颜色（持久化到 `%AppData%\Zhuoying\settings.json`）
 - **DPI**：Per-Monitor DPI Aware v2，混合缩放多屏为一级支持场景
 
-后续规划见 [DEVPLAN.md](DEVPLAN.md)：下一步是标注编辑器
-（画笔/形状/箭头/文字/编号/马赛克/橡皮 + 撤销重做），之后是保存文件与贴图窗口等，
+后续规划见 [DEVPLAN.md](DEVPLAN.md)：下一步是标注编辑器其余工具
+（画笔/箭头/文字/编号/马赛克/橡皮），之后是保存文件与贴图窗口等，
 完整需求见 [REQUIREMENTS.md](REQUIREMENTS.md) 与 [TOOLS-SPEC.md](TOOLS-SPEC.md)。
 
 ## 版本号
@@ -47,7 +50,8 @@ dotnet run --project src\Zhuoying
 运行后驻留系统托盘，按 `Ctrl+1`（或托盘菜单"截屏"）开始截屏；
 `Esc` / 右键取消。开发自测参数：`--test-capture`（启动 1.5s 后自动触发抓屏）、
 `--test-settings`（启动即打开设置窗口）、`--test-copy x,y,w,h` /
-`--test-select x,y,w,h`（自动抓屏后按虚拟屏幕物理像素设选区并复制/仅设选区）。
+`--test-select x,y,w,h`（自动抓屏后按虚拟屏幕物理像素设选区并复制/仅设选区）、
+`--test-shape x,y,w,h[,圆角%[,填充 0/1[,粗细]]]`（添加一个形状标注）。
 
 ## 目录结构
 
@@ -55,7 +59,8 @@ dotnet run --project src\Zhuoying
 src/Zhuoying/
   Platform/            平台抽象接口（IHotkeyService / IScreenCapture / IClipboardImage）
   Platform/Windows/    Windows P/Invoke 实现
-  Capture/             截屏会话：控制器、遮罩窗口、选区层、位图工具
+  Capture/             截屏会话：控制器、遮罩窗口、选区/标注/编辑器分层、工具栏
+  Annotations/         标注模型：元素、样式、线形表、命令式撤销/重做
   Settings/            配置模型、持久化、设置窗口
 docs/TROUBLESHOOTING.md  疑难问题根因记录（DPI / 剪贴板等）
 ```

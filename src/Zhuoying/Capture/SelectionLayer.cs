@@ -2,16 +2,15 @@ using System;
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Input;
 using Avalonia.Media;
 
 namespace Zhuoying.Capture;
 
 /// <summary>
-/// 选区视图层（铺满覆盖整个虚拟屏幕的截屏窗口）：半透明暗化遮罩、选区边框、
-/// 8 手柄、尺寸提示。选区状态与交互逻辑在 <see cref="SelectionController"/>
-///（虚拟屏幕物理像素）；本层负责指针事件 DIP → 物理像素上报、选区物理像素 → DIP 渲染。
-/// 换算一律手工进行（虚拟屏幕原点 + RenderScaling），与渲染定义上自洽。
+/// 选区渲染层（纯渲染，无输入）：半透明暗化遮罩、选区边框、8 手柄、尺寸提示。
+/// 指针输入统一由最上层的 <see cref="EditorLayer"/> 接收并路由（标注元素优先，
+/// 其余委托给 <see cref="SelectionController"/>）。
+/// 物理像素 ↔ DIP 换算手工进行（虚拟屏幕原点 + RenderScaling），与渲染定义上自洽。
 /// </summary>
 public sealed class SelectionLayer : Control
 {
@@ -20,38 +19,20 @@ public sealed class SelectionLayer : Control
     private static readonly Pen HandlePen = new(new SolidColorBrush(Color.FromRgb(0x2D, 0x8C, 0xF0)), 1.5);
     private static readonly IBrush LabelBackground = new SolidColorBrush(Color.FromArgb(0xCC, 0x20, 0x20, 0x20));
 
-    private static readonly StandardCursorType[] HandleCursors =
-    [
-        StandardCursorType.TopLeftCorner, StandardCursorType.TopSide, StandardCursorType.TopRightCorner,
-        StandardCursorType.RightSide, StandardCursorType.BottomRightCorner, StandardCursorType.BottomSide,
-        StandardCursorType.BottomLeftCorner, StandardCursorType.LeftSide,
-    ];
-
     private readonly SelectionController _controller;
     private readonly PixelPoint _origin; // 虚拟屏幕包围盒左上角（物理像素）
-    private StandardCursorType _currentCursor = StandardCursorType.Cross;
-    private bool _dragging;
 
     public SelectionLayer(SelectionController controller, PixelPoint origin)
     {
         _controller = controller;
         _origin = origin;
+        IsHitTestVisible = false;
         _controller.Changed += InvalidateVisual;
     }
 
     private double Scaling => (VisualRoot as TopLevel)?.RenderScaling ?? 1.0;
 
-    /// <summary>指针位置 → 虚拟屏幕物理像素（DIP × RenderScaling + 原点）。</summary>
-    private PixelPoint ToPhysical(PointerEventArgs e)
-    {
-        var s = Scaling;
-        var p = e.GetPosition(this);
-        return new PixelPoint(
-            _origin.X + (int)Math.Round(p.X * s),
-            _origin.Y + (int)Math.Round(p.Y * s));
-    }
-
-    /// <summary>虚拟屏幕物理像素矩形 → 窗口 DIP。</summary>
+    /// <summary>虚拟屏幕物理像素矩形 → 窗口 DIP（可越出窗口范围，绘制时自然裁剪）。</summary>
     private Rect ToLocal(PixelRect r)
     {
         var s = Scaling;
@@ -60,55 +41,9 @@ public sealed class SelectionLayer : Control
             r.Width / s, r.Height / s);
     }
 
-    protected override void OnPointerPressed(PointerPressedEventArgs e)
-    {
-        base.OnPointerPressed(e);
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || _controller.IsDragging)
-            return;
-        _controller.PointerPressed(ToPhysical(e), Scaling);
-        _dragging = true;
-        e.Pointer.Capture(this);
-    }
-
-    protected override void OnPointerMoved(PointerEventArgs e)
-    {
-        base.OnPointerMoved(e);
-        if (_dragging)
-            _controller.PointerMoved(ToPhysical(e));
-        else if (!_controller.IsDragging)
-            UpdateCursor(ToPhysical(e));
-    }
-
-    protected override void OnPointerReleased(PointerReleasedEventArgs e)
-    {
-        base.OnPointerReleased(e);
-        if (!_dragging || e.InitialPressMouseButton != MouseButton.Left)
-            return;
-        _dragging = false;
-        e.Pointer.Capture(null);
-        _controller.PointerReleased();
-        UpdateCursor(ToPhysical(e));
-    }
-
-    private void UpdateCursor(PixelPoint physical)
-    {
-        var handle = _controller.HitHandle(physical, SelectionMetrics.HandleHitRadius * Scaling);
-        var type = handle >= 0 ? HandleCursors[handle]
-            : _controller.Selection.Contains(physical) && !_controller.IsDefaultSelection
-                ? StandardCursorType.SizeAll
-                : StandardCursorType.Cross;
-        if (type == _currentCursor)
-            return;
-        _currentCursor = type;
-        Cursor = new Cursor(type);
-    }
-
     public override void Render(DrawingContext context)
     {
         var bounds = new Rect(Bounds.Size);
-
-        // 透明底：保证选区镂空后整层仍可命中指针事件
-        context.DrawRectangle(Brushes.Transparent, null, bounds);
 
         var physical = _controller.Selection;
         var hasSelection = physical.Width > 0 && physical.Height > 0;

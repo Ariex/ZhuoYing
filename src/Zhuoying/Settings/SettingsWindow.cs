@@ -9,7 +9,7 @@ using Zhuoying.Platform;
 
 namespace Zhuoying.Settings;
 
-/// <summary>设置窗口。当前仅支持修改截屏快捷键。</summary>
+/// <summary>设置窗口：截屏快捷键 + 标注预设颜色。</summary>
 public sealed class SettingsWindow : Window
 {
     private static readonly IBrush BoxBorderIdle = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xC8));
@@ -17,22 +17,27 @@ public sealed class SettingsWindow : Window
 
     private readonly HotkeySetting _original;
     private readonly Func<HotkeySetting, bool> _tryApply;
-    private readonly Action<HotkeySetting> _save;
+    private readonly Action<HotkeySetting, System.Collections.Generic.List<string>> _save;
 
     private readonly Border _hotkeyBox;
     private readonly TextBlock _hotkeyText;
     private readonly TextBlock _errorText;
+    private readonly System.Collections.Generic.List<(TextBox Box, Border Preview)> _colorEditors = [];
     private HotkeySetting? _pending;
 
-    public SettingsWindow(HotkeySetting current, Func<HotkeySetting, bool> tryApply, Action<HotkeySetting> save)
+    public SettingsWindow(
+        HotkeySetting current,
+        System.Collections.Generic.IReadOnlyList<string> annotationColors,
+        Func<HotkeySetting, bool> tryApply,
+        Action<HotkeySetting, System.Collections.Generic.List<string>> save)
     {
         _original = current;
         _tryApply = tryApply;
         _save = save;
 
         Title = $"捉影 — 设置  v{AppVersion.Display}";
-        Width = 380;
-        Height = 230;
+        Width = 400;
+        Height = 470;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         try
@@ -79,6 +84,40 @@ public sealed class SettingsWindow : Window
         var cancelButton = new Button { Content = "取消", Padding = new Thickness(20, 6) };
         cancelButton.Click += (_, _) => Close();
 
+        // 标注颜色编辑区：10 个 #RRGGBB 输入框 + 实时预览（留空表示不使用该槽位）
+        var colorGrid = new WrapPanel { Orientation = Orientation.Horizontal };
+        for (var i = 0; i < AppSettings.MaxAnnotationColors; i++)
+        {
+            var box = new TextBox
+            {
+                Width = 84,
+                Height = 30,
+                FontSize = 12,
+                Watermark = "#RRGGBB",
+                Text = i < annotationColors.Count ? annotationColors[i] : "",
+            };
+            var preview = new Border
+            {
+                Width = 18, Height = 18,
+                CornerRadius = new CornerRadius(3),
+                BorderThickness = new Thickness(1),
+                BorderBrush = BoxBorderIdle,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 12, 0),
+            };
+            var b = box;
+            var p = preview;
+            box.TextChanged += (_, _) => UpdatePreview(b, p);
+            UpdatePreview(box, preview);
+            _colorEditors.Add((box, preview));
+            colorGrid.Children.Add(new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 6),
+                Children = { box, preview },
+            });
+        }
+
         Content = new StackPanel
         {
             Margin = new Thickness(20),
@@ -94,6 +133,8 @@ public sealed class SettingsWindow : Window
                     Foreground = Brushes.Gray,
                     TextWrapping = TextWrapping.Wrap,
                 },
+                new TextBlock { Text = "标注预设颜色（最多 10 个，留空跳过）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
+                colorGrid,
                 _errorText,
                 new StackPanel
                 {
@@ -106,6 +147,13 @@ public sealed class SettingsWindow : Window
         };
 
         Opened += (_, _) => _hotkeyBox.Focus();
+    }
+
+    private static void UpdatePreview(TextBox box, Border preview)
+    {
+        preview.Background = Color.TryParse(box.Text?.Trim() ?? "", out var color)
+            ? new SolidColorBrush(color)
+            : Brushes.Transparent;
     }
 
     private void OnHotkeyBoxKeyDown(object? sender, KeyEventArgs e)
@@ -139,21 +187,26 @@ public sealed class SettingsWindow : Window
 
     private void OnSave()
     {
+        var colors = new System.Collections.Generic.List<string>();
+        foreach (var (box, _) in _colorEditors)
+        {
+            var text = box.Text?.Trim() ?? "";
+            if (text.Length > 0 && Color.TryParse(text, out _))
+                colors.Add(text);
+        }
+        if (colors.Count == 0)
+            colors = AppSettings.DefaultAnnotationColors();
+
         var candidate = _pending ?? _original;
-        if (candidate.SameAs(_original))
+        if (!candidate.SameAs(_original) && !_tryApply(candidate))
         {
-            Close();
+            _errorText.Text = $"热键 {candidate.Display} 注册失败（可能被其他程序占用），已恢复原热键";
+            _errorText.IsVisible = true;
+            _tryApply(_original);
             return;
         }
-        if (_tryApply(candidate))
-        {
-            _save(candidate);
-            Close();
-            return;
-        }
-        _errorText.Text = $"热键 {candidate.Display} 注册失败（可能被其他程序占用），已恢复原热键";
-        _errorText.IsVisible = true;
-        _tryApply(_original);
+        _save(candidate, colors);
+        Close();
     }
 
     private static bool IsModifierKey(Key key) => key is

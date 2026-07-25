@@ -1,23 +1,29 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
+using Avalonia.Media;
 using Zhuoying.Platform;
 
 namespace Zhuoying.Capture;
 
 /// <summary>
-/// 截屏触发入口：一次触发 = 冻结整个虚拟屏幕 → 创建跨屏会话（每显示器一个遮罩窗口）。
+/// 截屏触发入口：一次触发 = 冻结整个虚拟屏幕 → 创建覆盖所有显示器的截屏会话。
 /// </summary>
 public sealed class CaptureController
 {
     private readonly IScreenCapture _screenCapture;
     private readonly IClipboardImage _clipboard;
+    private readonly Func<IReadOnlyList<Color>> _presetColors;
     private CaptureSession? _session;
 
-    public CaptureController(IScreenCapture screenCapture, IClipboardImage clipboard)
+    public CaptureController(
+        IScreenCapture screenCapture, IClipboardImage clipboard,
+        Func<IReadOnlyList<Color>> presetColors)
     {
         _screenCapture = screenCapture;
         _clipboard = clipboard;
+        _presetColors = presetColors;
     }
 
     public void StartCapture()
@@ -46,7 +52,8 @@ public sealed class CaptureController
         // 一次 BitBlt 抓整个虚拟屏幕，保证各屏画面同一时刻
         var frame = _screenCapture.CaptureRegion(virtualBounds);
 
-        var session = new CaptureSession(monitors, cursorMonitor, frame, virtualBounds, _clipboard);
+        var session = new CaptureSession(
+            monitors, cursorMonitor, frame, virtualBounds, _clipboard, _presetColors());
         session.Finished += () => _session = null;
         _session = session;
         session.Show();
@@ -57,4 +64,11 @@ public sealed class CaptureController
 
     /// <summary>测试钩子：只设定选区不复制。</summary>
     public void TestSelect(PixelRect physicalRect) => _session?.TestSelect(physicalRect);
+
+    /// <summary>测试钩子：添加一个形状标注。</summary>
+    public void TestAddShape(
+        PixelRect bounds, double radiusPercent, bool filled, double thickness,
+        double rotationDeg = 0, int lineStyleIndex = 0, double opacity = 100) =>
+        _session?.TestAddShape(
+            bounds, radiusPercent, filled, thickness, rotationDeg, lineStyleIndex, opacity);
 }
