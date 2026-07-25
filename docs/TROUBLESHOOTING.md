@@ -36,8 +36,10 @@
 2. DIB 头 `biXPelsPerMeter/biYPelsPerMeter` 写入来源显示器真实 DPI
    （`round(96 × 缩放比 × 1000 / 25.4)`，200% → 7559），使 Word 等按物理尺寸
    排版的应用获得正确插入大小；
-3. 在独立 STA 线程上经 OLE（`OleSetClipboard` + `OleFlushClipboard`）写入，
-   数据固化后不依赖进程存活。
+3. 写入走纯 Win32 剪贴板 API（`SetClipboardData` + HGLOBAL，所有权交给系统后
+   数据不依赖进程存活）。早期版本曾用 OLE（`OleSetClipboard`+`OleFlushClipboard`），
+   为 NativeAOT 兼容（AOT 不支持内置 COM interop）改为纯 Win32——两者写出的
+   字节完全一致，减半问题的根因与写入 API 无关（见上表"OLE 路径"实验行）。
 
 **经验**：排查剪贴板问题时，`IsClipboardFormatAvailable` 偶发误报，以
 `EnumClipboardFormats` 枚举为准；读 DIB 头部（宽/高/ppm）比截图肉眼比对可靠得多。

@@ -4,3 +4,5 @@ obj/
 .vs/
 *.log
 smoke_*.png
+
+publish/

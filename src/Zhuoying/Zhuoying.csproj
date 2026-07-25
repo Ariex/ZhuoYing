@@ -12,8 +12,6 @@
     <RootNamespace>Zhuoying</RootNamespace>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <!-- OLE 剪贴板需要托管 IDataObject 的 COM 互操作封送 -->
-    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
   </PropertyGroup>
 
   <ItemGroup>

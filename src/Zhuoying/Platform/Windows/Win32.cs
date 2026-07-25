@@ -220,18 +220,4 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
 
-    // ---------- OLE 剪贴板 ----------
-
-    [DllImport("ole32.dll")]
-    public static extern int OleInitialize(IntPtr pvReserved);
-
-    [DllImport("ole32.dll")]
-    public static extern void OleUninitialize();
-
-    [DllImport("ole32.dll")]
-    public static extern int OleSetClipboard(
-        [MarshalAs(UnmanagedType.Interface)] System.Runtime.InteropServices.ComTypes.IDataObject? pDataObj);
-
-    [DllImport("ole32.dll")]
-    public static extern int OleFlushClipboard();
 }

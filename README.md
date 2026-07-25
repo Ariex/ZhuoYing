@@ -52,6 +52,21 @@ dotnet build src\Zhuoying\Zhuoying.csproj
 dotnet run --project src\Zhuoying
 ```
 
+### 发布
+
+根目录两个脚本（双击或命令行运行）：
+
+- **`aot-win.bat`** — NativeAOT 发布 → `publish\aot\`：exe 约 19MB + 3 个原生库
+  （共约 35MB；`.pdb` 分发不带）。启动最快、免运行时、难反编译。
+  前置：VS「使用 C++ 的桌面开发」工作负载（ILCompiler 的 vcvars 探测在
+  VS 2026 上不可靠，脚本内用 vcvars64 + `IlcUseEnvironmentalTools` 绕过）。
+- **`release-singlefile-win.bat`** — 自包含单文件发布 → `publish\singlefile\Zhuoying.exe`
+  （约 46MB，原生库内嵌，免运行时，首启解压略慢）。
+
+发布后用 `--test-copy` / `--test-shape` / `--test-line` / `--test-text`
+系列参数对产物做回归。注意 .bat 为 GBK 编码 + CRLF（cmd 对 UTF-8/LF
+中文批处理会解析错位），编辑时保持编码。
+
 运行后驻留系统托盘，按 `Ctrl+1`（或托盘菜单"截屏"）开始截屏；
 `Esc` / 右键取消。开发自测参数：`--test-capture`（启动 1.5s 后自动触发抓屏）、
 `--test-settings`（启动即打开设置窗口）、`--test-copy x,y,w,h` /

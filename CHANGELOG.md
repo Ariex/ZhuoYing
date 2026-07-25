@@ -3,6 +3,20 @@
 版本规则见 README「版本号」节：`主.次` 为里程碑（手动），
 文件版本第三、四段为构建时间戳（距 2026-01-01 天数 . 当日分钟数，自动）。
 
+## 未发布（NativeAOT 兼容性改造）
+
+- 剪贴板写入由 OLE/COM 改为纯 Win32 API（`SetClipboardData` + HGLOBAL）：
+  字节与格式完全不变（仅 CF_DIB + 正确 DPI 头），数据固化语义保持；
+  移除 BuiltInComInteropSupport 与托管 IDataObject
+- settings.json 序列化改为 System.Text.Json 源生成（文件格式不变：
+  缩进、枚举字符串、未知字段忽略、缺失字段默认值）
+- 全量回归通过：三场景复制像素级一致、进程退出后数据保持、
+  剪贴板格式枚举干净、真实用户配置读取正常
+- NativeAOT 发布打通（发布方法见 README）：exe 约 19MB；AOT 产物回归通过
+  （剪贴板三场景、形状/箭头/文字渲染、ColorPicker 主题、源生成配置读取）
+- 新增发布脚本 `aot-win.bat`（NativeAOT）与 `release-singlefile-win.bat`
+  （自包含单文件 46MB），产物分别在 publish\aot 与 publish\singlefile
+
 ## 0.5 — 2026-07-25（阶段五：文字工具）
 
 - 文字工具（T）：点击创建文本框并立即编辑；矩形内多行文本自动换行，
