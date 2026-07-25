@@ -6,71 +6,92 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
-using Zhuoying.Platform;
 
 namespace Zhuoying.Capture;
 
 /// <summary>
-/// 覆盖单个显示器的截屏窗口：冻结帧背景 + 选区层 + 工具条。
+/// 覆盖整个虚拟屏幕（所有显示器包围盒）的单一截屏窗口：冻结帧背景 + 选区层 + 工具条。
+/// 用单窗口而非每屏一个：PMv2 窗口跨屏时像素 1:1 不被系统缩放，而"创建后跨 DPI
+/// 移动窗口"会让 Avalonia 渲染缩放与输入命中缩放永久分裂（按钮点不中，
+/// 见 docs/TROUBLESHOOTING.md §10），单窗口从创建起 DPI 稳定，天然自洽。
 /// </summary>
 public sealed class CaptureOverlayWindow : Window
 {
-    private readonly MonitorInfo _monitor;
-    private readonly Action<PixelRect> _onCopy;
-    private readonly SelectionLayer _selectionLayer;
+    private readonly PixelRect _virtualBounds;
+    private readonly Action _requestCopy;
+    private readonly Action _requestCancel;
     private readonly Border _toolbar;
-    private readonly Canvas _toolbarCanvas;
+    private int _geometryChecks;
 
-    public CaptureOverlayWindow(WriteableBitmap frame, MonitorInfo monitor, Action<PixelRect> onCopy)
+    /// <summary>窗口几何已按实际 DPI 重算（会话据此重摆工具条）。</summary>
+    public event Action? GeometryChanged;
+
+    public CaptureOverlayWindow(
+        WriteableBitmap frame, PixelRect virtualBounds, SelectionController selection,
+        Action requestCopy, Action requestCancel)
     {
-        _monitor = monitor;
-        _onCopy = onCopy;
+        _virtualBounds = virtualBounds;
+        _requestCopy = requestCopy;
+        _requestCancel = requestCancel;
 
         SystemDecorations = SystemDecorations.None;
         Topmost = true;
         ShowInTaskbar = false;
         CanResize = false;
-        ShowActivated = true;
         Background = Brushes.Black;
         WindowStartupLocation = WindowStartupLocation.Manual;
         Cursor = new Cursor(StandardCursorType.Cross);
 
-        Position = monitor.Bounds.TopLeft;
-        Width = monitor.Bounds.Width / monitor.Scaling;
-        Height = monitor.Bounds.Height / monitor.Scaling;
+        Position = virtualBounds.TopLeft;
 
         var image = new Image { Source = frame, Stretch = Stretch.Fill };
         RenderOptions.SetBitmapInterpolationMode(image, BitmapInterpolationMode.None);
 
-        _selectionLayer = new SelectionLayer();
-        _selectionLayer.DragStarted += () => _toolbar!.IsVisible = false;
-        _selectionLayer.DragCompleted += _ => PositionToolbar();
-        _selectionLayer.DoubleTapped += (_, _) => CopySelection();
+        var selectionLayer = new SelectionLayer(selection, virtualBounds.TopLeft);
+        selectionLayer.DoubleTapped += (_, _) => _requestCopy();
 
         _toolbar = BuildToolbar();
-        _toolbarCanvas = new Canvas();
-        _toolbarCanvas.Children.Add(_toolbar);
+        _toolbar.IsVisible = false;
+        var toolbarCanvas = new Canvas();
+        toolbarCanvas.Children.Add(_toolbar);
 
-        Content = new Panel { Children = { image, _selectionLayer, _toolbarCanvas } };
+        Content = new Panel { Children = { image, selectionLayer, toolbarCanvas } };
 
-        Opened += OnOpened;
+        Opened += (_, _) => { ApplyGeometry(); PostGeometryCheck(); };
+        ScalingChanged += (_, _) => PostGeometryCheck();
         KeyDown += OnKeyDownHandler;
         PointerPressed += OnPointerPressedHandler;
     }
 
-    private void OnOpened(object? sender, EventArgs e)
+    /// <summary>按当前实际 DPI 把窗口对齐到虚拟屏幕包围盒（物理像素 → DIP）。</summary>
+    private void ApplyGeometry()
     {
-        // 打开后按窗口实际 DPI 纠正尺寸（构造时用的是查询到的显示器缩放）
         var s = RenderScaling;
-        Width = _monitor.Bounds.Width / s;
-        Height = _monitor.Bounds.Height / s;
-        Position = _monitor.Bounds.TopLeft;
+        Width = _virtualBounds.Width / s;
+        Height = _virtualBounds.Height / s;
+        Position = _virtualBounds.TopLeft;
+        GeometryChanged?.Invoke();
+    }
 
-        // 默认选区 = 当前屏幕全屏（REQUIREMENTS §4.3）
-        _selectionLayer.SetSelection(new Rect(0, 0, Width, Height));
-        PositionToolbar();
-        Activate();
-        Focus();
+    /// <summary>
+    /// DPI 调整过程中系统按"建议矩形"缩放窗口，会与我们设置的尺寸互相覆盖
+    ///（TROUBLESHOOTING §7），不能同步改尺寸；投递事后校验直至几何收敛。
+    /// </summary>
+    private void PostGeometryCheck()
+    {
+        if (_geometryChecks >= 20) // 收敛保险丝，正常一两轮即稳定
+            return;
+        _geometryChecks++;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            var s = RenderScaling;
+            var sizeOk = Math.Abs(Width - _virtualBounds.Width / s) < 0.5
+                         && Math.Abs(Height - _virtualBounds.Height / s) < 0.5;
+            if (sizeOk && Position == _virtualBounds.TopLeft)
+                return;
+            ApplyGeometry();
+            PostGeometryCheck();
+        }, Avalonia.Threading.DispatcherPriority.Background);
     }
 
     private Border BuildToolbar()
@@ -91,7 +112,7 @@ public sealed class CaptureOverlayWindow : Window
         // 显式覆写为灰阶状态色
         AddStateBackground(copyButton, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
         AddStateBackground(copyButton, ":pressed", Color.FromRgb(0xD4, 0xD4, 0xD4));
-        copyButton.Click += (_, _) => CopySelection();
+        copyButton.Click += (_, _) => _requestCopy();
 
         return new Border
         {
@@ -143,9 +164,9 @@ public sealed class CaptureOverlayWindow : Window
     }
 
     /// <summary>工具条停靠在选区右下：优先选区下方，放不下换上方，再不行放选区内部。</summary>
-    private void PositionToolbar()
+    public void ShowToolbarFor(PixelRect physicalSelection)
     {
-        var sel = _selectionLayer.Selection;
+        var sel = ToLocal(physicalSelection);
         _toolbar.IsVisible = true;
         _toolbar.Measure(Size.Infinity);
         var size = _toolbar.DesiredSize;
@@ -157,46 +178,44 @@ public sealed class CaptureOverlayWindow : Window
             y = sel.Y - gap - size.Height;
         if (y < 0)
             y = Math.Max(0, sel.Bottom - gap - size.Height);
+        y = Math.Clamp(y, 0, Math.Max(0, Bounds.Height - size.Height));
 
         Canvas.SetLeft(_toolbar, x);
         Canvas.SetTop(_toolbar, y);
     }
 
-    private void CopySelection()
+    public void HideToolbar() => _toolbar.IsVisible = false;
+
+    /// <summary>虚拟屏幕物理像素矩形 → 窗口 DIP。</summary>
+    private Rect ToLocal(PixelRect r)
     {
-        var sel = _selectionLayer.Selection;
-        if (sel.Width <= 0 || sel.Height <= 0)
-            return;
         var s = RenderScaling;
-        var x1 = (int)Math.Round(sel.X * s);
-        var y1 = (int)Math.Round(sel.Y * s);
-        var x2 = (int)Math.Round(sel.Right * s);
-        var y2 = (int)Math.Round(sel.Bottom * s);
-        var physical = new PixelRect(x1, y1, Math.Max(1, x2 - x1), Math.Max(1, y2 - y1));
-        _onCopy(physical);
+        return new Rect(
+            (r.X - _virtualBounds.X) / s, (r.Y - _virtualBounds.Y) / s,
+            r.Width / s, r.Height / s);
     }
 
     private void OnKeyDownHandler(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Escape)
         {
-            Close();
+            _requestCancel();
             e.Handled = true;
         }
         else if (e.Key == Key.Enter
                  || (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control)))
         {
-            CopySelection();
+            _requestCopy();
             e.Handled = true;
         }
     }
 
     private void OnPointerPressedHandler(object? sender, PointerPressedEventArgs e)
     {
-        // 右键 = 后退/取消（REQUIREMENTS §4 取消逻辑，一期直接取消本次截屏）
+        // 右键 = 后退/取消（REQUIREMENTS §4 取消逻辑，当前直接取消本次截屏）
         if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
         {
-            Close();
+            _requestCancel();
             e.Handled = true;
         }
     }

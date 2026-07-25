@@ -1,18 +1,18 @@
 using System;
+using System.Linq;
 using Avalonia;
 using Zhuoying.Platform;
 
 namespace Zhuoying.Capture;
 
 /// <summary>
-/// 截屏会话控制器：触发 → 冻结抓取 → 覆盖窗口 → 输出。
-/// 一期为单屏（鼠标所在显示器）；二期扩展为全部显示器各覆盖一个窗口。
+/// 截屏触发入口：一次触发 = 冻结整个虚拟屏幕 → 创建跨屏会话（每显示器一个遮罩窗口）。
 /// </summary>
 public sealed class CaptureController
 {
     private readonly IScreenCapture _screenCapture;
     private readonly IClipboardImage _clipboard;
-    private CaptureOverlayWindow? _overlay;
+    private CaptureSession? _session;
 
     public CaptureController(IScreenCapture screenCapture, IClipboardImage clipboard)
     {
@@ -22,47 +22,39 @@ public sealed class CaptureController
 
     public void StartCapture()
     {
-        if (_overlay != null)
+        if (_session != null)
             return; // 会话进行中，忽略再次触发
 
+        var monitors = _screenCapture.GetAllMonitors();
+        if (monitors.Count == 0)
+            return;
         var cursor = _screenCapture.GetCursorPosition();
-        var monitor = _screenCapture.GetMonitorAt(cursor);
-        // 先冻结再显示遮罩，后续操作全部基于冻结帧（REQUIREMENTS §4.1）
-        var frame = _screenCapture.CaptureRegion(monitor.Bounds);
+        var cursorMonitor = monitors.FirstOrDefault(m => m.Bounds.Contains(cursor)) ?? monitors[0];
 
-        _overlay = new CaptureOverlayWindow(frame, monitor,
-            physicalRect => CopyToClipboard(frame, monitor, physicalRect));
-        _overlay.Closed += (_, _) =>
+        // 虚拟屏幕 = 所有显示器包围盒（副屏在主屏左/上时原点为负）
+        var virtualBounds = monitors[0].Bounds;
+        foreach (var m in monitors.Skip(1))
         {
-            _overlay = null;
-            frame.Dispose();
-        };
-        _overlay.Show();
+            var left = Math.Min(virtualBounds.X, m.Bounds.X);
+            var top = Math.Min(virtualBounds.Y, m.Bounds.Y);
+            var right = Math.Max(virtualBounds.Right, m.Bounds.Right);
+            var bottom = Math.Max(virtualBounds.Bottom, m.Bounds.Bottom);
+            virtualBounds = new PixelRect(left, top, right - left, bottom - top);
+        }
+
+        // 先冻结再显示遮罩，后续操作全部基于冻结帧（REQUIREMENTS §4.1）；
+        // 一次 BitBlt 抓整个虚拟屏幕，保证各屏画面同一时刻
+        var frame = _screenCapture.CaptureRegion(virtualBounds);
+
+        var session = new CaptureSession(monitors, cursorMonitor, frame, virtualBounds, _clipboard);
+        session.Finished += () => _session = null;
+        _session = session;
+        session.Show();
     }
 
-    private void CopyToClipboard(
-        Avalonia.Media.Imaging.WriteableBitmap frame, MonitorInfo monitor, PixelRect physicalRect)
-    {
-        try
-        {
-            var dpi = 96.0 * monitor.Scaling;
-            var cropped = BitmapUtil.Crop(frame, physicalRect, new Vector(dpi, dpi));
-            // 先关遮罩再写剪贴板：进程持有高 DPI 全屏窗口时写入，
-            // 剪贴板位图会被打上高 DPI 虚拟化标签，导致部分粘贴目标缩小图像
-            _overlay?.Close();
-            try
-            {
-                _clipboard.SetImage(cropped);
-            }
-            finally
-            {
-                cropped.Dispose();
-            }
-        }
-        catch (Exception)
-        {
-            // 一期：输出失败不崩溃；托盘气泡提示留到生命周期完善阶段
-            _overlay?.Close();
-        }
-    }
+    /// <summary>测试钩子：在进行中的会话上直接设定选区（虚拟屏幕物理像素）并复制。</summary>
+    public void TestCopy(PixelRect physicalRect) => _session?.TestCopy(physicalRect);
+
+    /// <summary>测试钩子：只设定选区不复制。</summary>
+    public void TestSelect(PixelRect physicalRect) => _session?.TestSelect(physicalRect);
 }

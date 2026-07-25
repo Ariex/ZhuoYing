@@ -8,8 +8,10 @@ using Avalonia.Media;
 namespace Zhuoying.Capture;
 
 /// <summary>
-/// 选区交互与渲染层：半透明暗化遮罩、选区边框、8 手柄调整、选区内拖拽移动、
-/// 尺寸提示（物理像素）。坐标为窗口 DIP；对外换算物理像素时使用窗口 RenderScaling。
+/// 选区视图层（铺满覆盖整个虚拟屏幕的截屏窗口）：半透明暗化遮罩、选区边框、
+/// 8 手柄、尺寸提示。选区状态与交互逻辑在 <see cref="SelectionController"/>
+///（虚拟屏幕物理像素）；本层负责指针事件 DIP → 物理像素上报、选区物理像素 → DIP 渲染。
+/// 换算一律手工进行（虚拟屏幕原点 + RenderScaling），与渲染定义上自洽。
 /// </summary>
 public sealed class SelectionLayer : Control
 {
@@ -18,17 +20,6 @@ public sealed class SelectionLayer : Control
     private static readonly Pen HandlePen = new(new SolidColorBrush(Color.FromRgb(0x2D, 0x8C, 0xF0)), 1.5);
     private static readonly IBrush LabelBackground = new SolidColorBrush(Color.FromArgb(0xCC, 0x20, 0x20, 0x20));
 
-    private const double HandleSize = 8;      // 手柄边长（DIP）
-    private const double HandleHitRadius = 10; // 手柄命中半径（DIP）
-
-    /// <summary>8 个手柄的锚点系数（x, y ∈ {0, 0.5, 1}），顺序：四角 + 四边中点。</summary>
-    private static readonly (double X, double Y)[] HandleAnchors =
-    [
-        (0, 0), (0.5, 0), (1, 0),
-        (1, 0.5), (1, 1), (0.5, 1),
-        (0, 1), (0, 0.5),
-    ];
-
     private static readonly StandardCursorType[] HandleCursors =
     [
         StandardCursorType.TopLeftCorner, StandardCursorType.TopSide, StandardCursorType.TopRightCorner,
@@ -36,242 +27,127 @@ public sealed class SelectionLayer : Control
         StandardCursorType.BottomLeftCorner, StandardCursorType.LeftSide,
     ];
 
-    private enum DragMode
+    private readonly SelectionController _controller;
+    private readonly PixelPoint _origin; // 虚拟屏幕包围盒左上角（物理像素）
+    private StandardCursorType _currentCursor = StandardCursorType.Cross;
+    private bool _dragging;
+
+    public SelectionLayer(SelectionController controller, PixelPoint origin)
     {
-        None,
-        Create,
-        Move,
-        Resize,
-        /// <summary>按在选区外：已预览"角扩展到按下点"，拖拽则转为 Create，直接松开则保留扩展结果。</summary>
-        Expand,
+        _controller = controller;
+        _origin = origin;
+        _controller.Changed += InvalidateVisual;
     }
 
-    private const double DragThreshold = 3;
+    private double Scaling => (VisualRoot as TopLevel)?.RenderScaling ?? 1.0;
 
-    private Rect _selection;
-    private Rect _dragStartRect;
-    private Point _dragStart;
-    private DragMode _mode;
-    private int _handleIndex;
-    private StandardCursorType _currentCursor = StandardCursorType.Cross;
-
-    public Rect Selection => _selection;
-    public bool IsDragging => _mode != DragMode.None;
-
-    /// <summary>拖拽开始（用于隐藏工具条）。</summary>
-    public event Action? DragStarted;
-
-    /// <summary>拖拽结束，参数为最终选区。</summary>
-    public event Action<Rect>? DragCompleted;
-
-    public void SetSelection(Rect rect)
+    /// <summary>指针位置 → 虚拟屏幕物理像素（DIP × RenderScaling + 原点）。</summary>
+    private PixelPoint ToPhysical(PointerEventArgs e)
     {
-        _selection = rect;
-        InvalidateVisual();
+        var s = Scaling;
+        var p = e.GetPosition(this);
+        return new PixelPoint(
+            _origin.X + (int)Math.Round(p.X * s),
+            _origin.Y + (int)Math.Round(p.Y * s));
+    }
+
+    /// <summary>虚拟屏幕物理像素矩形 → 窗口 DIP。</summary>
+    private Rect ToLocal(PixelRect r)
+    {
+        var s = Scaling;
+        return new Rect(
+            (r.X - _origin.X) / s, (r.Y - _origin.Y) / s,
+            r.Width / s, r.Height / s);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed || _controller.IsDragging)
             return;
-
-        var pos = Clamp(e.GetPosition(this));
-        _dragStart = pos;
-        _dragStartRect = _selection;
-
-        var handle = HitHandle(pos);
-        if (handle >= 0)
-        {
-            _mode = DragMode.Resize;
-            _handleIndex = handle;
-        }
-        else if (IsFullBounds(_selection))
-        {
-            // 默认全屏选区：内部按下即开始画新矩形（否则无法重新框选）
-            _mode = DragMode.Create;
-            _selection = new Rect(pos, pos);
-        }
-        else if (_selection.Contains(pos))
-        {
-            _mode = DragMode.Move;
-        }
-        else
-        {
-            // 选区外按下：先预览把最近的角/边扩展到按下点；
-            // 后续拖拽超过阈值则转为画新矩形，直接松开则保留扩展结果。
-            // 注意不能用 Rect.Union——它对零尺寸矩形（单点）有空矩形特判会原样返回
-            _mode = DragMode.Expand;
-            var left = Math.Min(_dragStartRect.X, pos.X);
-            var top = Math.Min(_dragStartRect.Y, pos.Y);
-            var right = Math.Max(_dragStartRect.Right, pos.X);
-            var bottom = Math.Max(_dragStartRect.Bottom, pos.Y);
-            _selection = new Rect(left, top, right - left, bottom - top);
-        }
-
-        DragStarted?.Invoke();
+        _controller.PointerPressed(ToPhysical(e), Scaling);
+        _dragging = true;
         e.Pointer.Capture(this);
-        InvalidateVisual();
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        var pos = Clamp(e.GetPosition(this));
-
-        switch (_mode)
-        {
-            case DragMode.None:
-                UpdateCursor(pos);
-                return;
-            case DragMode.Create:
-                _selection = new Rect(
-                    Math.Min(_dragStart.X, pos.X), Math.Min(_dragStart.Y, pos.Y),
-                    Math.Abs(pos.X - _dragStart.X), Math.Abs(pos.Y - _dragStart.Y));
-                break;
-            case DragMode.Move:
-                var dx = Math.Clamp(pos.X - _dragStart.X, -_dragStartRect.X, Bounds.Width - _dragStartRect.Right);
-                var dy = Math.Clamp(pos.Y - _dragStart.Y, -_dragStartRect.Y, Bounds.Height - _dragStartRect.Bottom);
-                _selection = new Rect(_dragStartRect.X + dx, _dragStartRect.Y + dy,
-                    _dragStartRect.Width, _dragStartRect.Height);
-                break;
-            case DragMode.Resize:
-                _selection = ResizeByHandle(pos);
-                break;
-            case DragMode.Expand:
-                if (Math.Abs(pos.X - _dragStart.X) >= DragThreshold
-                    || Math.Abs(pos.Y - _dragStart.Y) >= DragThreshold)
-                {
-                    _mode = DragMode.Create;
-                    _selection = new Rect(
-                        Math.Min(_dragStart.X, pos.X), Math.Min(_dragStart.Y, pos.Y),
-                        Math.Abs(pos.X - _dragStart.X), Math.Abs(pos.Y - _dragStart.Y));
-                }
-                break;
-        }
-        InvalidateVisual();
+        if (_dragging)
+            _controller.PointerMoved(ToPhysical(e));
+        else if (!_controller.IsDragging)
+            UpdateCursor(ToPhysical(e));
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_mode == DragMode.None || e.InitialPressMouseButton != MouseButton.Left)
+        if (!_dragging || e.InitialPressMouseButton != MouseButton.Left)
             return;
-        var mode = _mode;
-        _mode = DragMode.None;
+        _dragging = false;
         e.Pointer.Capture(null);
-        // 新建时位移过小视为误点击，恢复原选区（Expand 模式松开则保留扩展结果）
-        if (mode == DragMode.Create
-            && (_selection.Width < DragThreshold || _selection.Height < DragThreshold))
-            _selection = _dragStartRect;
-        InvalidateVisual();
-        UpdateCursor(Clamp(e.GetPosition(this)));
-        DragCompleted?.Invoke(_selection);
+        _controller.PointerReleased();
+        UpdateCursor(ToPhysical(e));
     }
 
-    private Rect ResizeByHandle(Point pos)
+    private void UpdateCursor(PixelPoint physical)
     {
-        var (ax, ay) = HandleAnchors[_handleIndex];
-        double left = _dragStartRect.X, top = _dragStartRect.Y;
-        double right = _dragStartRect.Right, bottom = _dragStartRect.Bottom;
-        if (ax == 0) left = pos.X;
-        else if (ax == 1) right = pos.X;
-        if (ay == 0) top = pos.Y;
-        else if (ay == 1) bottom = pos.Y;
-        // 允许拖拽越过对边，自动翻转
-        return new Rect(
-            Math.Min(left, right), Math.Min(top, bottom),
-            Math.Abs(right - left), Math.Abs(bottom - top));
-    }
-
-    /// <returns>命中的手柄下标，未命中返回 -1。</returns>
-    private int HitHandle(Point pos)
-    {
-        if (_selection.Width <= 0 || _selection.Height <= 0)
-            return -1;
-        for (var i = 0; i < HandleAnchors.Length; i++)
-        {
-            var center = HandleCenter(i);
-            if (Math.Abs(pos.X - center.X) <= HandleHitRadius && Math.Abs(pos.Y - center.Y) <= HandleHitRadius)
-                return i;
-        }
-        return -1;
-    }
-
-    private Point HandleCenter(int index)
-    {
-        var (ax, ay) = HandleAnchors[index];
-        return new Point(_selection.X + ax * _selection.Width, _selection.Y + ay * _selection.Height);
-    }
-
-    private void UpdateCursor(Point pos)
-    {
-        var handle = HitHandle(pos);
+        var handle = _controller.HitHandle(physical, SelectionMetrics.HandleHitRadius * Scaling);
         var type = handle >= 0 ? HandleCursors[handle]
-            : _selection.Contains(pos) && !IsFullBounds(_selection) ? StandardCursorType.SizeAll
-            : StandardCursorType.Cross;
+            : _controller.Selection.Contains(physical) && !_controller.IsDefaultSelection
+                ? StandardCursorType.SizeAll
+                : StandardCursorType.Cross;
         if (type == _currentCursor)
             return;
         _currentCursor = type;
         Cursor = new Cursor(type);
     }
 
-    private Point Clamp(Point p) => new(
-        Math.Clamp(p.X, 0, Bounds.Width),
-        Math.Clamp(p.Y, 0, Bounds.Height));
-
-    /// <summary>选区是否即整个屏幕（容差 0.5 DIP）。</summary>
-    private bool IsFullBounds(Rect rect) =>
-        rect.X <= 0.5 && rect.Y <= 0.5
-        && rect.Right >= Bounds.Width - 0.5 && rect.Bottom >= Bounds.Height - 0.5;
-
     public override void Render(DrawingContext context)
     {
         var bounds = new Rect(Bounds.Size);
-        var sel = _selection.Intersect(bounds);
 
         // 透明底：保证选区镂空后整层仍可命中指针事件
         context.DrawRectangle(Brushes.Transparent, null, bounds);
 
+        var physical = _controller.Selection;
+        var hasSelection = physical.Width > 0 && physical.Height > 0;
+        var sel = hasSelection ? ToLocal(physical) : default;
+
         // 遮罩：全屏暗化，选区镂空（EvenOdd）
         var mask = new GeometryGroup { FillRule = FillRule.EvenOdd };
         mask.Children.Add(new RectangleGeometry(bounds));
-        if (sel.Width > 0 && sel.Height > 0)
+        if (hasSelection)
             mask.Children.Add(new RectangleGeometry(sel));
         context.DrawGeometry(MaskBrush, null, mask);
 
-        if (sel.Width <= 0 || sel.Height <= 0)
+        if (!hasSelection)
             return;
 
         context.DrawRectangle(null, BorderPen, sel);
-        DrawHandles(context);
-        DrawSizeLabel(context, sel);
+        DrawHandles(context, sel);
+        DrawSizeLabel(context, sel, physical);
     }
 
-    private void DrawHandles(DrawingContext context)
+    private void DrawHandles(DrawingContext context, Rect sel)
     {
         // 新建拖拽过程中不画手柄，避免与十字光标视觉冲突
-        if (_mode == DragMode.Create)
+        if (_controller.IsCreating)
             return;
-        for (var i = 0; i < HandleAnchors.Length; i++)
+        const double size = SelectionMetrics.HandleSize;
+        foreach (var (ax, ay) in SelectionController.HandleAnchors)
         {
-            var center = HandleCenter(i);
-            var rect = new Rect(
-                center.X - HandleSize / 2, center.Y - HandleSize / 2, HandleSize, HandleSize);
+            var center = new Point(sel.X + ax * sel.Width, sel.Y + ay * sel.Height);
+            var rect = new Rect(center.X - size / 2, center.Y - size / 2, size, size);
             context.DrawRectangle(Brushes.White, HandlePen, rect, 1.5, 1.5);
         }
     }
 
-    private void DrawSizeLabel(DrawingContext context, Rect sel)
+    private void DrawSizeLabel(DrawingContext context, Rect sel, PixelRect physical)
     {
-        var scaling = (VisualRoot as TopLevel)?.RenderScaling ?? 1.0;
-        // 与裁剪取整方式保持一致，保证提示值与输出尺寸吻合
-        var x1 = (int)Math.Round(sel.X * scaling);
-        var y1 = (int)Math.Round(sel.Y * scaling);
-        var x2 = (int)Math.Round(sel.Right * scaling);
-        var y2 = (int)Math.Round(sel.Bottom * scaling);
+        // 选区本身就是物理像素，直接显示，与输出尺寸严格一致
         var text = new FormattedText(
-            $"{x2 - x1} × {y2 - y1}",
+            $"{physical.Width} × {physical.Height}",
             CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             new Typeface(FontFamily.Default), 12, Brushes.White);
 

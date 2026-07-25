@@ -41,15 +41,33 @@ public partial class App : Application
 
             desktop.Exit += (_, _) => _hotkey?.Dispose();
 
-            // 开发自测：--test-capture 自动触发一次抓屏；--test-settings 打开设置窗口
+            // 开发自测：--test-capture 自动触发一次抓屏；--test-settings 打开设置窗口；
+            // --test-copy x,y,w,h 在自动抓屏后直接按虚拟屏幕物理像素设选区并复制（免键鼠注入）
             var args = desktop.Args ?? [];
             if (Array.IndexOf(args, "--test-capture") >= 0)
                 DispatcherTimer.RunOnce(() => _captureController!.StartCapture(),
                     TimeSpan.FromMilliseconds(1500));
+            SetupTestRectHook(args, "--test-copy", r => _captureController!.TestCopy(r));
+            SetupTestRectHook(args, "--test-select", r => _captureController!.TestSelect(r));
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>解析形如 `--test-copy x,y,w,h` 的自测参数：1.5s 后自动抓屏，3s 后对选区执行动作。</summary>
+    private void SetupTestRectHook(string[] args, string name, Action<Avalonia.PixelRect> action)
+    {
+        var index = Array.IndexOf(args, name);
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var parts = args[index + 1].Split(',');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(parts[0]), int.Parse(parts[1]),
+            int.Parse(parts[2]), int.Parse(parts[3]));
+        DispatcherTimer.RunOnce(() => _captureController!.StartCapture(),
+            TimeSpan.FromMilliseconds(1500));
+        DispatcherTimer.RunOnce(() => action(rect), TimeSpan.FromMilliseconds(3000));
     }
 
     /// <summary>注册（或改绑）截屏热键并同步托盘提示文案。</summary>
