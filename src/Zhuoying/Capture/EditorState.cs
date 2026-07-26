@@ -24,7 +24,8 @@ public enum EditorTool
 public sealed record EditorOptions(
     IReadOnlyList<Color> PresetColors,
     double FontSizeMin,
-    double FontSizeMax);
+    double FontSizeMax,
+    string SavePath);
 
 /// <summary>
 /// 编辑器会话状态：当前工具、各工具的当前样式（新元素用）、预设颜色。

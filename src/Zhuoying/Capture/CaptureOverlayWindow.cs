@@ -18,6 +18,8 @@ public sealed class CaptureOverlayWindow : Window
 {
     private readonly PixelRect _virtualBounds;
     private readonly Action _requestCopy;
+    private readonly Action _requestSave;
+    private readonly Action _requestSaveAs;
     private readonly Action _requestCancel;
     private readonly EditorState _editorState;
     private readonly EditorLayer _editorLayer;
@@ -32,14 +34,24 @@ public sealed class CaptureOverlayWindow : Window
     public CaptureOverlayWindow(
         WriteableBitmap frame, PixelRect virtualBounds,
         SelectionController selection, EditorState editorState,
-        Action requestCopy, Action requestCancel)
+        Action requestCopy, Action requestSave, Action requestSaveAs, Action requestCancel)
     {
         _virtualBounds = virtualBounds;
-        // 复制前先提交进行中的文字编辑，输出才包含最新文本
+        // 输出（复制/保存）前先提交进行中的文字编辑，输出才包含最新文本
         _requestCopy = () =>
         {
             _textEdit!.Commit();
             requestCopy();
+        };
+        _requestSave = () =>
+        {
+            _textEdit!.Commit();
+            requestSave();
+        };
+        _requestSaveAs = () =>
+        {
+            _textEdit!.Commit();
+            requestSaveAs();
         };
         _requestCancel = requestCancel;
         _editorState = editorState;
@@ -83,7 +95,8 @@ public sealed class CaptureOverlayWindow : Window
         var numberActions = new NumberActionsPanel(editorState, virtualBounds.TopLeft);
         GeometryChanged += numberActions.Refresh;
 
-        _toolbar = new EditorToolbar(editorState, _requestCopy, requestCancel);
+        _toolbar = new EditorToolbar(
+            editorState, _requestCopy, _requestSave, _requestSaveAs, requestCancel);
         _toolbar.Root.IsVisible = false;
         // 行显隐刚改完时中间容器的 measure 尚未失效，立刻 Measure 会拿到旧尺寸
         //（曾导致属性行出现后工具条底边溢出屏幕），投递到布局完成后再重摆
@@ -221,6 +234,14 @@ public sealed class CaptureOverlayWindow : Window
         else if (e.Key == Key.Enter || (ctrl && e.Key == Key.C))
         {
             _requestCopy();
+            e.Handled = true;
+        }
+        else if (ctrl && e.Key == Key.S)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                _requestSaveAs();
+            else
+                _requestSave();
             e.Handled = true;
         }
         else if (ctrl && e.Key == Key.Z)

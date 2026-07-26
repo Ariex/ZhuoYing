@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Zhuoying.Annotations;
 using Zhuoying.Platform;
 
@@ -24,6 +25,7 @@ public sealed class CaptureSession
     private readonly AnnotationModel _annotations;
     private readonly EditorState _editor;
     private readonly CaptureOverlayWindow _window;
+    private readonly string _savePath;
     private bool _closing;
     private bool _opened;
 
@@ -49,9 +51,10 @@ public sealed class CaptureSession
         _annotations = new AnnotationModel();
         _editor = new EditorState(_annotations, options);
         _editor.SetBackground(fullFrame, virtualBounds.TopLeft); // 区域模糊的采样来源
+        _savePath = options.SavePath;
 
         _window = new CaptureOverlayWindow(
-            fullFrame, virtualBounds, _selection, _editor, Copy, CloseAll);
+            fullFrame, virtualBounds, _selection, _editor, Copy, Save, SaveAs, CloseAll);
         _window.Opened += (_, _) => { _opened = true; UpdateToolbar(); };
         _window.GeometryChanged += () => { if (_opened) UpdateToolbar(); };
         _window.Closed += (_, _) => CloseAll();
@@ -73,6 +76,13 @@ public sealed class CaptureSession
 
     /// <summary>测试钩子：只设定选区不复制（供视觉验证选区渲染与工具条定位）。</summary>
     public void TestSelect(PixelRect physicalRect) => _selection.SetSelection(physicalRect);
+
+    /// <summary>测试钩子：设定选区并保存到默认目录。</summary>
+    public void TestSave(PixelRect physicalRect)
+    {
+        _selection.SetSelection(physicalRect);
+        Save();
+    }
 
     /// <summary>测试钩子：添加一条线/箭头元素（免注入验证线渲染与输出合成）。</summary>
     public void TestAddLine(
@@ -242,6 +252,87 @@ public sealed class CaptureSession
         _annotations.Elements.Add(el);
         _annotations.Push(new AddElementCommand(_annotations, el));
         _annotations.Selected = el;
+    }
+
+    /// <summary>保存：自动落到设定目录（时间戳文件名，重名加序号），完成后结束会话。</summary>
+    private void Save()
+    {
+        var sel = _selection.Selection;
+        if (sel.Width <= 0 || sel.Height <= 0)
+            return;
+        try
+        {
+            System.IO.Directory.CreateDirectory(_savePath);
+            var path = UniquePath(_savePath, $"捉影_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+            WritePng(sel, path);
+            CloseAll();
+        }
+        catch (Exception)
+        {
+            // 保存失败不崩溃（目录无权限等）；托盘气泡提示留到生命周期完善阶段
+            CloseAll();
+        }
+    }
+
+    /// <summary>另存为：用户指定目录与文件名；取消则回到会话继续编辑。</summary>
+    private async void SaveAs()
+    {
+        var sel = _selection.Selection;
+        if (sel.Width <= 0 || sel.Height <= 0)
+            return;
+        try
+        {
+            var file = await _window.StorageProvider.SaveFilePickerAsync(
+                new Avalonia.Platform.Storage.FilePickerSaveOptions
+                {
+                    Title = "另存为",
+                    SuggestedFileName = $"捉影_{DateTime.Now:yyyyMMdd_HHmmss}",
+                    DefaultExtension = "png",
+                    FileTypeChoices =
+                    [
+                        new Avalonia.Platform.Storage.FilePickerFileType("PNG 图片")
+                        {
+                            Patterns = ["*.png"],
+                        },
+                    ],
+                });
+            if (file?.TryGetLocalPath() is not { } path)
+                return; // 用户取消：回会话
+            WritePng(sel, path);
+            CloseAll();
+        }
+        catch (Exception)
+        {
+            CloseAll();
+        }
+    }
+
+    /// <summary>合成输出并写 PNG（pHYs 块携带来源屏幕 DPI）。</summary>
+    private void WritePng(PixelRect sel, string path)
+    {
+        var dpi = 96.0 * DpiOwner(sel).Scaling;
+        var output = ComposeOutput(sel, new Vector(dpi, dpi));
+        try
+        {
+            using var ms = new System.IO.MemoryStream();
+            output.Save(ms);
+            System.IO.File.WriteAllBytes(path,
+                Zhuoying.Platform.Windows.PngDpiWriter.WithDpi(ms.ToArray(), dpi, dpi));
+        }
+        finally
+        {
+            output.Dispose();
+        }
+    }
+
+    private static string UniquePath(string dir, string fileName)
+    {
+        var path = System.IO.Path.Combine(dir, fileName);
+        var name = System.IO.Path.GetFileNameWithoutExtension(fileName);
+        var ext = System.IO.Path.GetExtension(fileName);
+        for (var i = 2; System.IO.File.Exists(path); i++)
+            path = System.IO.Path.Combine(dir, $"{name}-{i}{ext}");
+        return path;
     }
 
     private void Copy()

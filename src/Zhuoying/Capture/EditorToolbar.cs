@@ -128,7 +128,8 @@ public sealed class EditorToolbar
         _rowsPanel.Children.Insert(target, _toolRow);
     }
 
-    public EditorToolbar(EditorState state, Action copy, Action cancel)
+    public EditorToolbar(
+        EditorState state, Action copy, Action save, Action saveAs, Action cancel)
     {
         _state = state;
         _model = state.Model;
@@ -150,6 +151,8 @@ public sealed class EditorToolbar
         _undoButton = ToolButton(GlyphIcon("↶"), "撤销 (Ctrl+Z)", () => _model.Undo());
         _redoButton = ToolButton(GlyphIcon("↷"), "重做 (Ctrl+Y)", () => _model.Redo());
         var copyButton = ToolButton(CopyIcon(), "复制 (Enter)", copy);
+        var saveButton = ToolButton(SaveIcon(), "保存到默认目录 (Ctrl+S)", save);
+        var saveAsButton = ToolButton(SaveAsIcon(), "另存为… (Ctrl+Shift+S)", saveAs);
         var cancelButton = ToolButton(GlyphIcon("✕"), "取消 (Esc)", cancel);
 
         var toolRow = new StackPanel
@@ -163,7 +166,7 @@ public sealed class EditorToolbar
                 _textToolButton, _numberToolButton, _mosaicToolButton, _eraserToolButton,
                 Separator(),
                 _undoButton, _redoButton, Separator(),
-                copyButton, cancelButton,
+                copyButton, saveButton, saveAsButton, cancelButton,
             },
         };
 
@@ -1699,6 +1702,66 @@ public sealed class EditorToolbar
                     Text = "沿素材不透明轮廓描边（含镂空内缘）",
                     FontSize = 10,
                     Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
+                },
+            },
+        };
+    }
+
+    /// <summary>保存图标：软盘。</summary>
+    private static Control SaveIcon()
+    {
+        var stroke = new SolidColorBrush(IconColor);
+        return new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 4,4 L 14.5,4 L 18,7.5 L 18,18 L 4,18 Z"),
+                    Stroke = stroke, StrokeThickness = 2, StrokeJoin = PenLineJoin.Round,
+                },
+                new Avalonia.Controls.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 7.5,4.5 L 7.5,8.5 L 13,8.5 L 13,4.5"),
+                    Stroke = stroke, StrokeThickness = 1.6,
+                },
+                new Avalonia.Controls.Shapes.Rectangle
+                {
+                    Width = 8, Height = 5,
+                    Stroke = stroke, StrokeThickness = 1.6,
+                    [Canvas.LeftProperty] = 7.0, [Canvas.TopProperty] = 11.5,
+                },
+            },
+        };
+    }
+
+    /// <summary>另存为图标：软盘 + 右下角小笔。</summary>
+    private static Control SaveAsIcon()
+    {
+        var stroke = new SolidColorBrush(IconColor);
+        return new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 3.5,3.5 L 13,3.5 L 16,6.5 L 16,10 M 8.5,16.5 L 3.5,16.5 L 3.5,3.5"),
+                    Stroke = stroke, StrokeThickness = 2, StrokeJoin = PenLineJoin.Round,
+                },
+                new Avalonia.Controls.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 6.5,4 L 6.5,7.5 L 11.5,7.5 L 11.5,4"),
+                    Stroke = stroke, StrokeThickness = 1.5,
+                },
+                new Avalonia.Controls.Shapes.Path
+                {
+                    // 小笔（斜杆 + 笔尖）
+                    Data = Geometry.Parse("M 12,19 L 12.8,16 L 18.5,10.3 L 20.7,12.5 L 15,18.2 Z"),
+                    Stroke = stroke, StrokeThickness = 1.6, StrokeJoin = PenLineJoin.Round,
                 },
             },
         };

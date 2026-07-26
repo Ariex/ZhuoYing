@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Zhuoying.Platform;
 
 namespace Zhuoying.Settings;
@@ -17,19 +18,21 @@ public sealed class SettingsWindow : Window
 
     private readonly HotkeySetting _original;
     private readonly Func<HotkeySetting, bool> _tryApply;
-    private readonly Action<HotkeySetting, System.Collections.Generic.List<string>> _save;
+    private readonly Action<HotkeySetting, System.Collections.Generic.List<string>, string> _save;
 
     private readonly Border _hotkeyBox;
     private readonly TextBlock _hotkeyText;
     private readonly TextBlock _errorText;
+    private readonly TextBox _savePathBox;
     private readonly System.Collections.Generic.List<(TextBox Box, Border Preview)> _colorEditors = [];
     private HotkeySetting? _pending;
 
     public SettingsWindow(
         HotkeySetting current,
         System.Collections.Generic.IReadOnlyList<string> annotationColors,
+        string savePath,
         Func<HotkeySetting, bool> tryApply,
-        Action<HotkeySetting, System.Collections.Generic.List<string>> save)
+        Action<HotkeySetting, System.Collections.Generic.List<string>, string> save)
     {
         _original = current;
         _tryApply = tryApply;
@@ -37,7 +40,7 @@ public sealed class SettingsWindow : Window
 
         Title = $"捉影 — 设置  v{AppVersion.Display}";
         Width = 400;
-        Height = 470;
+        Height = 560;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         try
@@ -127,6 +130,29 @@ public sealed class SettingsWindow : Window
             });
         }
 
+        // 保存目录：文本框 + 浏览按钮（留空 = 默认"图片\捉影"）
+        _savePathBox = new TextBox
+        {
+            Watermark = "留空 = 图片\\捉影",
+            Text = savePath,
+            FontSize = 12,
+        };
+        var browseButton = new Button { Content = "浏览…", Padding = new Thickness(10, 4) };
+        browseButton.Click += async (_, _) =>
+        {
+            var folders = await StorageProvider.OpenFolderPickerAsync(
+                new Avalonia.Platform.Storage.FolderPickerOpenOptions
+                {
+                    Title = "选择保存目录",
+                    AllowMultiple = false,
+                });
+            if (folders.Count > 0 && folders[0].TryGetLocalPath() is { } local)
+                _savePathBox.Text = local;
+        };
+        var savePathRow = new DockPanel { Children = { browseButton, _savePathBox } };
+        DockPanel.SetDock(browseButton, Dock.Right);
+        browseButton.Margin = new Thickness(6, 0, 0, 0);
+
         Content = new StackPanel
         {
             Margin = new Thickness(20),
@@ -142,6 +168,8 @@ public sealed class SettingsWindow : Window
                     Foreground = Brushes.Gray,
                     TextWrapping = TextWrapping.Wrap,
                 },
+                new TextBlock { Text = "保存目录（Ctrl+S）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
+                savePathRow,
                 new TextBlock { Text = "标注预设颜色（最多 10 个，留空跳过）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
                 colorGrid,
                 _errorText,
@@ -214,7 +242,7 @@ public sealed class SettingsWindow : Window
             _tryApply(_original);
             return;
         }
-        _save(candidate, colors);
+        _save(candidate, colors, _savePathBox.Text?.Trim() ?? "");
         Close();
     }
 

@@ -38,7 +38,8 @@ public partial class App : Application
                 () => new Zhuoying.Capture.EditorOptions(
                     GetAnnotationColors(),
                     Math.Max(1, _appSettings.FontSizeMin),
-                    Math.Max(_appSettings.FontSizeMin, _appSettings.FontSizeMax)));
+                    Math.Max(_appSettings.FontSizeMin, _appSettings.FontSizeMax),
+                    _appSettings.ResolveSavePath()));
 
             _hotkey = new WindowsHotkeyService();
             TryApplyHotkey(_appSettings.Hotkey);
@@ -53,6 +54,7 @@ public partial class App : Application
                     TimeSpan.FromMilliseconds(1500));
             SetupTestRectHook(args, "--test-copy", r => _captureController!.TestCopy(r));
             SetupTestRectHook(args, "--test-select", r => _captureController!.TestSelect(r));
+            SetupTestRectHook(args, "--test-save", r => _captureController!.TestSave(r));
             SetupTestShapeHook(args);
             SetupTestLineHook(args);
             SetupTestTextHook(args);
@@ -329,11 +331,13 @@ public partial class App : Application
         _settingsWindow = new SettingsWindow(
             _appSettings.Hotkey,
             _appSettings.AnnotationColors,
+            _appSettings.SavePath,
             TryApplyHotkey,
-            (hotkey, colors) =>
+            (hotkey, colors, savePath) =>
             {
                 _appSettings.Hotkey = hotkey;
                 _appSettings.AnnotationColors = colors;
+                _appSettings.SavePath = savePath;
                 _settingsService!.Save(_appSettings);
             });
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;

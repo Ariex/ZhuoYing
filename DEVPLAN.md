@@ -130,7 +130,11 @@
 - [x] AOT 回归通过（Svg.Model 有 IL2104 裁剪警告但 SVG 光栅化实测正常）
 - [x] 自测参数 `--test-stamp "x,y,w,h[,旋转[,描边宽[,透明度]]]|素材名或路径"`
 
-## 阶段十：橡皮 + 笔刷光标 + 放大镜 ✅（2026-07-26 完成，里程碑 0.10）
+## 阶段十：橡皮 + 笔刷光标 + 放大镜 + 保存 ✅（2026-07-26 完成，里程碑 0.10）
+
+- [x] 保存（Ctrl+S）：PNG 落设定目录（AppSettings.SavePath，空=图片\捉影；设置窗口文本框+浏览）；时间戳文件名重名加序号；Avalonia Save → PngDpiWriter.WithDpi 写 pHYs（DPI 取选区覆盖面积最大屏）；保存后关会话
+- [x] 另存为（Ctrl+Shift+S）：StorageProvider.SaveFilePickerAsync；取消回会话；工具条 保存/另存为 按钮（复制旁）
+- [x] 自测参数 `--test-save x,y,w,h`（验证：文件生成、2000×1300 物理像素、192dpi、标注合成、会话关闭）
 
 - [x] EraserElement：只擦画笔/荧光笔（用户定稿，取代旧"组遮罩"草案）；不渲染自身、不可选中，BuildClip 汇总全部橡皮带 → CombinedGeometry(Exclude)，AnnotationLayer 与输出合成渲染 PenElement 时统一套用；仅撤销可恢复
 - [x] StrokeGeometry 提取共享（画笔荧光裁剪 / 橡皮带共用带状几何）

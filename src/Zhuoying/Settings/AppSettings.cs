@@ -18,6 +18,15 @@ public sealed class AppSettings
 
     public double FontSizeMax { get; set; } = 100;
 
+    /// <summary>保存（Ctrl+S）目标目录；空 = 默认"图片\捉影"。</summary>
+    public string SavePath { get; set; } = "";
+
+    /// <summary>解析实际保存目录（空值回落默认）。</summary>
+    public string ResolveSavePath() => string.IsNullOrWhiteSpace(SavePath)
+        ? System.IO.Path.Combine(
+            System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures), "捉影")
+        : SavePath;
+
     public static System.Collections.Generic.List<string> DefaultAnnotationColors() =>
         ["#FF3B30", "#FFCC00", "#34C759", "#0A84FF", "#000000", "#FFFFFF"];
 }
