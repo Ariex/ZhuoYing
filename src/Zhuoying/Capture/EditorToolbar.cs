@@ -129,7 +129,7 @@ public sealed class EditorToolbar
     }
 
     public EditorToolbar(
-        EditorState state, Action copy, Action save, Action saveAs, Action cancel)
+        EditorState state, Action copy, Action save, Action saveAs, Action pin, Action cancel)
     {
         _state = state;
         _model = state.Model;
@@ -153,6 +153,7 @@ public sealed class EditorToolbar
         var copyButton = ToolButton(CopyIcon(), "复制 (Enter)", copy);
         var saveButton = ToolButton(SaveIcon(), "保存到默认目录 (Ctrl+S)", save);
         var saveAsButton = ToolButton(SaveAsIcon(), "另存为… (Ctrl+Shift+S)", saveAs);
+        var pinButton = ToolButton(PinIcon(), "贴图到屏幕 (F3)", pin);
         var cancelButton = ToolButton(GlyphIcon("✕"), "取消 (Esc)", cancel);
 
         var toolRow = new StackPanel
@@ -166,7 +167,7 @@ public sealed class EditorToolbar
                 _textToolButton, _numberToolButton, _mosaicToolButton, _eraserToolButton,
                 Separator(),
                 _undoButton, _redoButton, Separator(),
-                copyButton, saveButton, saveAsButton, cancelButton,
+                copyButton, saveButton, saveAsButton, pinButton, cancelButton,
             },
         };
 
@@ -1728,6 +1729,38 @@ public sealed class EditorToolbar
                     Text = "沿素材不透明轮廓描边（含镂空内缘）",
                     FontSize = 10,
                     Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
+                },
+            },
+        };
+    }
+
+    /// <summary>贴图图标：斜置图钉。</summary>
+    private static Control PinIcon()
+    {
+        var stroke = new SolidColorBrush(IconColor);
+        return new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Path
+                {
+                    // 钉帽 + 钉身（斜 45°）
+                    Data = Geometry.Parse(
+                        "M 12.2,3.2 L 18.8,9.8 L 16.6,10.4 L 14.8,12.2 L 14.2,16 L 6,7.8 L 9.8,7.2 L 11.6,5.4 Z"),
+                    Stroke = stroke,
+                    StrokeThickness = 1.8,
+                    StrokeJoin = PenLineJoin.Round,
+                },
+                new Avalonia.Controls.Shapes.Line
+                {
+                    // 钉尖指向左下
+                    StartPoint = new Point(9.2, 12.8),
+                    EndPoint = new Point(4, 18),
+                    Stroke = stroke,
+                    StrokeThickness = 2,
+                    StrokeLineCap = PenLineCap.Round,
                 },
             },
         };

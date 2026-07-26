@@ -54,7 +54,7 @@ public sealed class CaptureSession
         _savePath = options.SavePath;
 
         _window = new CaptureOverlayWindow(
-            fullFrame, virtualBounds, _selection, _editor, Copy, Save, SaveAs, CloseAll);
+            fullFrame, virtualBounds, _selection, _editor, Copy, Save, SaveAs, Pin, CloseAll);
         _window.Opened += (_, _) => { _opened = true; UpdateToolbar(); };
         _window.GeometryChanged += () => { if (_opened) UpdateToolbar(); };
         _window.Closed += (_, _) => CloseAll();
@@ -85,6 +85,13 @@ public sealed class CaptureSession
     {
         _selection.SetSelection(physicalRect);
         Save();
+    }
+
+    /// <summary>测试钩子：设定选区并贴图。</summary>
+    public void TestPin(PixelRect physicalRect)
+    {
+        _selection.SetSelection(physicalRect);
+        Pin();
     }
 
     /// <summary>测试钩子：添加一条线/箭头元素（免注入验证线渲染与输出合成）。</summary>
@@ -258,6 +265,27 @@ public sealed class CaptureSession
         _annotations.Elements.Add(el);
         _annotations.Push(new AddElementCommand(_annotations, el));
         _annotations.Selected = el;
+    }
+
+    /// <summary>贴图（F3）：选区合成后钉成置顶贴图窗（原位、物理像素 1:1），结束会话。</summary>
+    private void Pin()
+    {
+        var sel = _selection.Selection;
+        if (sel.Width <= 0 || sel.Height <= 0)
+            return;
+        try
+        {
+            // 显示用位图必须 96 DPI（TROUBLESHOOTING §2：非 96 DPI 位图 Avalonia
+            // 渲染错误放大）；来源 DPI 单独传给贴图窗，复制/保存时再标记
+            var dpi = 96.0 * DpiOwner(sel).Scaling;
+            var output = ComposeOutput(sel, new Vector(96, 96));
+            CloseAll();
+            new PinWindow(output, sel.TopLeft, dpi, _clipboard).Show();
+        }
+        catch (Exception)
+        {
+            CloseAll();
+        }
     }
 
     /// <summary>保存：自动落到设定目录（时间戳文件名，重名加序号），完成后结束会话。</summary>

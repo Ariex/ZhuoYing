@@ -62,6 +62,7 @@ public partial class App : Application
             SetupTestRectHook(args, "--test-copy", r => _captureController!.TestCopy(r));
             SetupTestRectHook(args, "--test-select", r => _captureController!.TestSelect(r));
             SetupTestRectHook(args, "--test-save", r => _captureController!.TestSave(r));
+            SetupTestRectHook(args, "--test-pin", r => _captureController!.TestPin(r));
             SetupTestShapeHook(args);
             SetupTestLineHook(args);
             SetupTestTextHook(args);

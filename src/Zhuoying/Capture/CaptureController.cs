@@ -78,6 +78,9 @@ public sealed class CaptureController
     /// <summary>测试钩子：设定选区并保存到默认目录。</summary>
     public void TestSave(PixelRect physicalRect) => _session?.TestSave(physicalRect);
 
+    /// <summary>测试钩子：设定选区并贴图。</summary>
+    public void TestPin(PixelRect physicalRect) => _session?.TestPin(physicalRect);
+
     /// <summary>测试钩子：添加一个文字标注。</summary>
     public void TestAddText(
         PixelRect bounds, string text, double fontSize, double rotationDeg,
