@@ -48,6 +48,10 @@ public sealed record TextStyle
     public double StrokeThickness { get; init; }
     public Color StrokeColor { get; init; } = Colors.White;
     public double StrokeOpacity { get; init; } = 100;
+
+    /// <summary>整体透明度 0–100（%）：同时作用于文字、文本框与描边
+    ///（与 BoxOpacity / StrokeOpacity 相乘叠加）。</summary>
+    public double Opacity { get; init; } = 100;
 }
 
 /// <summary>
@@ -90,9 +94,11 @@ public sealed class TextElement : BoxedElement
 
         using (context.PushTransform(RotationMatrix(r.Center, Style.RotationDeg)))
         {
+            var overall = Math.Clamp(Style.Opacity, 0, 100) / 100;
             if (Style.BoxEnabled)
             {
-                var alpha = (byte)Math.Round(Math.Clamp(Style.BoxOpacity, 0, 100) / 100 * 255);
+                var alpha = (byte)Math.Round(
+                    Math.Clamp(Style.BoxOpacity, 0, 100) / 100 * overall * 255);
                 var boxBrush = new SolidColorBrush(Color.FromArgb(
                     alpha, Style.BoxColor.R, Style.BoxColor.G, Style.BoxColor.B));
                 var rx = Style.BoxRadiusPercent / 100 * r.Width / 2;
@@ -121,7 +127,8 @@ public sealed class TextElement : BoxedElement
             {
                 if (Style.StrokeThickness > 0)
                 {
-                    var alpha = (byte)Math.Round(Math.Clamp(Style.StrokeOpacity, 0, 100) / 100 * 255);
+                    var alpha = (byte)Math.Round(
+                        Math.Clamp(Style.StrokeOpacity, 0, 100) / 100 * overall * 255);
                     var pen = new Pen(
                         new SolidColorBrush(Color.FromArgb(
                             alpha, Style.StrokeColor.R, Style.StrokeColor.G, Style.StrokeColor.B)),
@@ -153,7 +160,9 @@ public sealed class TextElement : BoxedElement
                 Style.Italic ? FontStyle.Italic : FontStyle.Normal,
                 Style.Bold ? FontWeight.Bold : FontWeight.Normal),
             Math.Max(1, Style.FontSize / scale),
-            new SolidColorBrush(Style.Color))
+            new SolidColorBrush(Color.FromArgb(
+                (byte)Math.Round(Math.Clamp(Style.Opacity, 0, 100) / 100 * 255),
+                Style.Color.R, Style.Color.G, Style.Color.B)))
         {
             MaxTextWidth = Math.Max(1, maxWidth),
             TextAlignment = Style.HAlign switch

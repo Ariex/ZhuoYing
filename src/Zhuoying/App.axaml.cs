@@ -164,8 +164,9 @@ public partial class App : Application
         var rotation = p.Length > 5 ? double.Parse(p[5]) : 0;
         var boxed = p.Length > 6 && p[6] == "1";
         var stroke = p.Length > 7 ? double.Parse(p[7]) : 0;
+        var opacity = p.Length > 8 ? double.Parse(p[8]) : 100;
         DispatcherTimer.RunOnce(
-            () => _captureController!.TestAddText(rect, text, size, rotation, boxed, stroke),
+            () => _captureController!.TestAddText(rect, text, size, rotation, boxed, stroke, opacity),
             TimeSpan.FromMilliseconds(2200));
     }
 

@@ -68,8 +68,8 @@ public sealed class CaptureController
     /// <summary>测试钩子：添加一个文字标注。</summary>
     public void TestAddText(
         PixelRect bounds, string text, double fontSize, double rotationDeg,
-        bool boxEnabled, double strokeThickness) =>
-        _session?.TestAddText(bounds, text, fontSize, rotationDeg, boxEnabled, strokeThickness);
+        bool boxEnabled, double strokeThickness, double opacity = 100) =>
+        _session?.TestAddText(bounds, text, fontSize, rotationDeg, boxEnabled, strokeThickness, opacity);
 
     /// <summary>测试钩子：添加一条线/箭头标注。</summary>
     public void TestAddLine(

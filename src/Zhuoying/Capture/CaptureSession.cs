@@ -104,7 +104,7 @@ public sealed class CaptureSession
     /// <summary>测试钩子：添加一个文字元素并选中（免注入验证文字渲染与输出合成）。</summary>
     public void TestAddText(
         PixelRect bounds, string text, double fontSize, double rotationDeg,
-        bool boxEnabled, double strokeThickness)
+        bool boxEnabled, double strokeThickness, double opacity = 100)
     {
         var el = new TextElement
         {
@@ -116,6 +116,7 @@ public sealed class CaptureSession
                 RotationDeg = rotationDeg,
                 BoxEnabled = boxEnabled,
                 StrokeThickness = strokeThickness,
+                Opacity = opacity,
             },
         };
         _annotations.Elements.Add(el);

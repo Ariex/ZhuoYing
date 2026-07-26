@@ -109,7 +109,10 @@ public sealed class TextEditController
         box.FontSize = Math.Max(1, style.FontSize / s);
         box.FontWeight = style.Bold ? FontWeight.Bold : FontWeight.Normal;
         box.FontStyle = style.Italic ? FontStyle.Italic : FontStyle.Normal;
-        box.Foreground = new SolidColorBrush(style.Color);
+        // 整体透明度实时预览（光标保持不透明以便编辑）
+        box.Foreground = new SolidColorBrush(Color.FromArgb(
+            (byte)Math.Round(Math.Clamp(style.Opacity, 0, 100) / 100 * 255),
+            style.Color.R, style.Color.G, style.Color.B));
         box.CaretBrush = new SolidColorBrush(style.Color);
         // 编辑框自身有 1 DIP 边框，内边距相应扣除，使编辑文字与元素层描边逐字对位
         box.Padding = new Thickness(Math.Max(0, style.Padding / s - 1));

@@ -61,6 +61,7 @@ public sealed class EditorToolbar
     private readonly Button _italicButton;
     private readonly Button _halignButton;
     private readonly Button _valignButton;
+    private readonly TextBlock _textOpacityText;
     private readonly StackPanel _textSwatchPanel;
     private readonly Button _numberToolButton;
     private readonly StackPanel _numberPropertyRow;
@@ -357,6 +358,13 @@ public sealed class EditorToolbar
         var boxSubmenu = SubmenuButton("文本框", BuildBoxSubmenu);
         var strokeSubmenu = SubmenuButton("描边", BuildStrokeSubmenu);
 
+        _textOpacityText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
+        var textOpacityButton = SliderPopupButton(
+            OpacityIcon(), _textOpacityText, "透明度",
+            min: 0, max: 100,
+            get: () => _state.CurrentTextStyle.Opacity,
+            setLive: v => _state.ModifyTextStyleLive(s => s with { Opacity = Math.Round(v) }));
+
         _textSwatchPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
         var textColorPick = new ColorPickButton(
             () => _state.CurrentTextStyle.Color,
@@ -373,7 +381,7 @@ public sealed class EditorToolbar
             Children =
             {
                 fontButton, fontSizeButton, _boldButton, _italicButton,
-                halignHost, valignHost, boxSubmenu, strokeSubmenu,
+                halignHost, valignHost, boxSubmenu, strokeSubmenu, textOpacityButton,
                 Separator(), _textSwatchPanel, textColorPick,
             },
         };
@@ -607,6 +615,7 @@ public sealed class EditorToolbar
                 textStyle.Italic ? ActiveBackground : Colors.Transparent);
             _halignButton.Content = WithChevron(AlignIcon(horizontal: true, (int)textStyle.HAlign));
             _valignButton.Content = WithChevron(AlignIcon(horizontal: false, (int)textStyle.VAlign));
+            _textOpacityText.Text = ((int)textStyle.Opacity).ToString();
             RefreshSwatches(_textSwatchPanel, textStyle.Color,
                 c => _state.ModifyTextStyle(s => s with { Color = c }));
 
