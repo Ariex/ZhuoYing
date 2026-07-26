@@ -24,6 +24,7 @@ public sealed class EditorLayer : Control
         CreateArrow,
         CreatePolyline,
         CreateNumber,
+        CreatePen,
         MoveElement,
         ResizeElement,
         RadiusElement,
@@ -212,7 +213,8 @@ public sealed class EditorLayer : Control
     /// <summary>取消进行中的创建（形状拖拽/折线逐点/编号放置）。取消了返回 true。</summary>
     public bool CancelInProgress()
     {
-        if (_op is not (Op.CreateShape or Op.CreateArrow or Op.CreatePolyline or Op.CreateNumber)
+        if (_op is not (Op.CreateShape or Op.CreateArrow or Op.CreatePolyline or Op.CreateNumber
+                or Op.CreatePen)
             || _liveElement == null)
             return false;
         if (_liveElement is NumberElement number) // 序列回退，下次放置沿用本编号
@@ -339,6 +341,23 @@ public sealed class EditorLayer : Control
                 _op = Op.CreatePolyline;
                 _model.RaiseChanged();
                 // 不捕获指针：折线靠点击序列而非拖拽
+                break;
+            }
+            case EditorTool.Pen:
+            {
+                // 拖拽采点画笔迹；工具保持激活可连续绘制
+                var el = new PenElement
+                {
+                    Style = _state.CurrentPenStyle,
+                    Frame = _state.BackgroundFrame,
+                    FrameOrigin = _state.BackgroundOrigin,
+                };
+                el.Points.Add(phys);
+                _model.Elements.Add(el);
+                _liveElement = el;
+                _op = Op.CreatePen;
+                _model.RaiseChanged();
+                e.Pointer.Capture(this);
                 break;
             }
             case EditorTool.Pixelate:
@@ -479,6 +498,8 @@ public sealed class EditorLayer : Control
             _dragStartBounds = boxed.Bounds;
         if (el is LineElement line)
             _dragStartPoints = line.Points.ToArray();
+        if (el is PenElement pen)
+            _dragStartPoints = pen.Points.ToArray();
         if (el is NumberElement number)
             _dragStartCenter = number.Center;
         e.Pointer.Capture(this);
@@ -509,6 +530,18 @@ public sealed class EditorLayer : Control
                 cn.Center = phys;
                 _model.RaiseChanged();
                 break;
+            case Op.CreatePen when _liveElement is PenElement cp:
+            {
+                // 最小步距抽稀（2 物理像素），限制点数
+                var last = cp.Points[^1];
+                double dx = phys.X - last.X, dy = phys.Y - last.Y;
+                if (dx * dx + dy * dy >= 4)
+                {
+                    cp.Points.Add(phys);
+                    _model.RaiseChanged();
+                }
+                break;
+            }
             case Op.ResizeElement when _liveElement is BoxedElement rs:
             {
                 var center = new Point(
@@ -517,6 +550,17 @@ public sealed class EditorLayer : Control
                 var lp = BoxedElement.RotatePoint(
                     new Point(phys.X, phys.Y), center, -rs.RotationDeg);
                 rs.Bounds = ResizeByHandle(lp);
+                _dragMutated = true;
+                _model.RaiseChanged();
+                break;
+            }
+            case Op.MoveElement when _liveElement is PenElement mpen:
+            {
+                var dx = phys.X - _dragStart.X;
+                var dy = phys.Y - _dragStart.Y;
+                for (var i = 0; i < mpen.Points.Count; i++)
+                    mpen.Points[i] = new PixelPoint(
+                        _dragStartPoints[i].X + dx, _dragStartPoints[i].Y + dy);
                 _dragMutated = true;
                 _model.RaiseChanged();
                 break;
@@ -636,6 +680,10 @@ public sealed class EditorLayer : Control
                 _model.Push(new AddElementCommand(_model, cn));
                 _model.Selected = cn;
                 // 编号工具保持激活：继续点击放置递增编号
+                break;
+            case Op.CreatePen when _liveElement is PenElement cp:
+                // 单点 = 圆点戳记，同样保留；画笔工具保持激活连续绘制
+                _model.Push(new AddElementCommand(_model, cp));
                 break;
             case Op.MoveElement:
             case Op.ResizeElement:
@@ -808,7 +856,7 @@ public sealed class EditorLayer : Control
 
         StandardCursorType type;
         if (_state.Tool is EditorTool.Shape or EditorTool.Arrow or EditorTool.Polyline
-            or EditorTool.Number or EditorTool.Pixelate or EditorTool.Blur)
+            or EditorTool.Number or EditorTool.Pixelate or EditorTool.Blur or EditorTool.Pen)
         {
             type = StandardCursorType.Cross;
         }
@@ -875,6 +923,11 @@ public sealed class EditorLayer : Control
                 break;
             case LineElement line:
                 RenderLineHandles(context, line);
+                break;
+            // 画笔笔迹：只画虚线包围盒（自由笔迹不提供缩放/旋转/顶点编辑）
+            case PenElement penSel when penSel.Points.Count > 0:
+                context.DrawRectangle(null, SelectionOutlinePen,
+                    ToLocal(penSel.Bounds).Inflate(2));
                 break;
             // 编号不可缩放/旋转：只画虚线选中框（四角按钮由 NumberActionsPanel 叠加）
             case NumberElement number:

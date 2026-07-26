@@ -15,6 +15,7 @@ public enum EditorTool
     Number,
     Pixelate,
     Blur,
+    Pen,
 }
 
 /// <summary>编辑器会话级选项（由设置文件提供）。</summary>
@@ -43,6 +44,7 @@ public sealed class EditorState
     private TextStyle _textStyle = new();
     private NumberStyle _numberStyle = new();
     private MosaicStyle _mosaicStyle = new();
+    private PenStyle _penStyle = new();
     // 每种标号类型独立的下一个编号（切换类型各自续接）
     private readonly Dictionary<NumberKind, int> _nextNumbers = new();
     // 连续修改（滑条拖动）期间的快照，结束时一次性入栈
@@ -62,6 +64,7 @@ public sealed class EditorState
             _polylineStyle = _polylineStyle with { Color = PresetColors[0] };
             _textStyle = _textStyle with { Color = PresetColors[0] };
             _numberStyle = _numberStyle with { Color = PresetColors[0] };
+            _penStyle = _penStyle with { Color = PresetColors[0] };
         }
         _textStyle = _textStyle with
         {
@@ -131,6 +134,9 @@ public sealed class EditorState
 
     /// <summary>当前区域模糊样式：选中模糊元素时为其样式，否则为待创建样式。</summary>
     public MosaicStyle CurrentMosaicStyle => (_model.Selected as MosaicElement)?.Style ?? _mosaicStyle;
+
+    /// <summary>当前画笔样式：选中笔迹时为其样式，否则为待创建样式。</summary>
+    public PenStyle CurrentPenStyle => (_model.Selected as PenElement)?.Style ?? _penStyle;
 
     public event Action? ToolChanged;
     public event Action? StyleChanged;
@@ -318,6 +324,32 @@ public sealed class EditorState
         RotationDeg = 0,
     };
 
+    // ---- 画笔样式 ----
+
+    public void ModifyPenStyle(Func<PenStyle, PenStyle> change)
+    {
+        _penStyle = change(CurrentPenStyle);
+        if (_model.Selected is PenElement el)
+        {
+            var before = el.CaptureState();
+            el.Style = change(el.Style);
+            _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
+        }
+        StyleChanged?.Invoke();
+    }
+
+    public void ModifyPenStyleLive(Func<PenStyle, PenStyle> change)
+    {
+        _penStyle = change(CurrentPenStyle);
+        if (_model.Selected is PenElement el)
+        {
+            el.Style = change(el.Style);
+            _continuousDirty = true;
+            _model.RaiseChanged();
+        }
+        StyleChanged?.Invoke();
+    }
+
     // ---- 连续修改会话（滑条弹层）----
 
     /// <summary>连续修改开始（滑条按下/弹层打开时快照）。</summary>
@@ -365,6 +397,9 @@ public sealed class EditorState
                 break;
             case MosaicElement mosaic:
                 _mosaicStyle = mosaic.Style;
+                break;
+            case PenElement pen:
+                _penStyle = pen.Style;
                 break;
             default:
                 return;

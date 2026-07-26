@@ -80,6 +80,11 @@ public sealed class EditorToolbar
     private readonly StackPanel _mosaicPropertyRow;
     private readonly StackPanel _toolRow;
     private readonly StackPanel _rowsPanel;
+    private readonly Button _penToolButton;
+    private readonly StackPanel _penPropertyRow;
+    private readonly TextBlock _penThickText;
+    private readonly CheckBox _highlightCheck;
+    private readonly StackPanel _penSwatchPanel;
     private readonly TextBlock _blockSizeText;
     private readonly TextBlock _blurRadiusText;
     private readonly MiniSlider _blockSlider;
@@ -119,6 +124,7 @@ public sealed class EditorToolbar
         _model = state.Model;
 
         _selectButton = ToolButton(SelectIcon(), "选择 (V)", () => _state.Tool = EditorTool.Select);
+        _penToolButton = ToolButton(PenIcon(), "画笔 (P)", () => _state.Tool = EditorTool.Pen);
         _shapeButton = ToolButton(RectIcon(22, 14, 11), "形状 (S)", () => _state.Tool = EditorTool.Shape);
         // 双工具组按钮：斜线分割双图标（左上=默认工具带蓝底，右下=第二工具），
         // 点击激活组内最近使用的工具；组内切换在属性行最左侧的选择器里做
@@ -140,8 +146,8 @@ public sealed class EditorToolbar
             Children =
             {
                 BuildGrip(), Separator(),
-                _selectButton, _shapeButton, _lineToolButton, _textToolButton, _numberToolButton,
-                _mosaicToolButton, Separator(),
+                _selectButton, _penToolButton, _shapeButton, _lineToolButton, _textToolButton,
+                _numberToolButton, _mosaicToolButton, Separator(),
                 _undoButton, _redoButton, Separator(),
                 copyButton, cancelButton,
             },
@@ -386,6 +392,43 @@ public sealed class EditorToolbar
             },
         };
 
+        // ---- 画笔属性行 ----
+
+        _penThickText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 22 };
+        var penThickButton = SliderPopupButton(
+            ThicknessIcon(), _penThickText, "粗细",
+            min: 1, max: 100,
+            get: () => _state.CurrentPenStyle.Thickness,
+            setLive: v => _state.ModifyPenStyleLive(s => s with { Thickness = Math.Round(v) }));
+
+        _highlightCheck = new CheckBox { Content = "荧光", VerticalAlignment = VerticalAlignment.Center };
+        _highlightCheck.IsCheckedChanged += (_, _) =>
+        {
+            if (_refreshing) return;
+            var highlight = _highlightCheck.IsChecked == true;
+            _state.ModifyPenStyle(s => s with { Highlight = highlight });
+        };
+
+        _penSwatchPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var penColorPick = new ColorPickButton(
+            () => _state.CurrentPenStyle.Color,
+            c => _state.ModifyPenStyleLive(s => s with { Color = c }),
+            _state.BeginContinuousStyle, _state.EndContinuousStyle)
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        _penPropertyRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
+            {
+                penThickButton, _highlightCheck,
+                Separator(), _penSwatchPanel, penColorPick,
+            },
+        };
+
         // ---- 编号属性行 ----
 
         var numberStyleHost = PaletteButton(
@@ -492,7 +535,7 @@ public sealed class EditorToolbar
             Children =
             {
                 toolRow, _propertyRow, _linePropertyRow, _textPropertyRow, _numberPropertyRow,
-                _mosaicPropertyRow,
+                _mosaicPropertyRow, _penPropertyRow,
             },
         };
         Root = new Border
@@ -522,6 +565,8 @@ public sealed class EditorToolbar
             var lineStyle = _state.CurrentLineStyle;
             _selectButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Select ? ActiveBackground : Colors.Transparent);
+            _penToolButton.Background = new SolidColorBrush(
+                _state.Tool == EditorTool.Pen ? ActiveBackground : Colors.Transparent);
             _shapeButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Shape ? ActiveBackground : Colors.Transparent);
             _lineToolButton.Background = new SolidColorBrush(
@@ -545,6 +590,7 @@ public sealed class EditorToolbar
                                   || _model.Selected is NumberElement;
             var showMosaicProps = _state.Tool is EditorTool.Pixelate or EditorTool.Blur
                                   || _model.Selected is MosaicElement;
+            var showPenProps = _state.Tool == EditorTool.Pen || _model.Selected is PenElement;
             // 属性行内只显示当前模式对应的滑条（像素大小 / 模糊半径）
             var showBlockSize = MosaicToolIndex() == 0;
             // 弧线只对折线有意义（箭头固定两点，样条无效果）
@@ -558,6 +604,7 @@ public sealed class EditorToolbar
                 || _textPropertyRow.IsVisible != showTextProps
                 || _numberPropertyRow.IsVisible != showNumberProps
                 || _mosaicPropertyRow.IsVisible != showMosaicProps
+                || _penPropertyRow.IsVisible != showPenProps
                 || _blockSizeHost.IsVisible != (showBlockSize && !_mosaicChoosing)
                 || _blurRadiusHost.IsVisible != (!showBlockSize && !_mosaicChoosing)
                 || _splineCheck.IsVisible != (showSpline && !_lineChoosing)
@@ -569,6 +616,7 @@ public sealed class EditorToolbar
                 _textPropertyRow.IsVisible = showTextProps;
                 _numberPropertyRow.IsVisible = showNumberProps;
                 _mosaicPropertyRow.IsVisible = showMosaicProps;
+                _penPropertyRow.IsVisible = showPenProps;
                 // 就地选择态：整行只显示两个工具选择按钮，其余全部隐藏
                 foreach (var child in _linePropertyRow.Children)
                     child.IsVisible = _lineChoosing
@@ -632,6 +680,12 @@ public sealed class EditorToolbar
             _blurRadiusText.Text = ((int)mosaicStyle.BlurRadius).ToString();
             _blockSlider.Value = mosaicStyle.BlockSize;   // 代码赋值不回触发 ValueChanged
             _blurSlider.Value = mosaicStyle.BlurRadius;
+            var penStyle = _state.CurrentPenStyle;
+            _penThickText.Text = ((int)penStyle.Thickness).ToString();
+            _highlightCheck.IsChecked = penStyle.Highlight;
+            RefreshSwatches(_penSwatchPanel, penStyle.Color,
+                c => _state.ModifyPenStyle(s => s with { Color = c }));
+
             _lineSwitchButton.Content = WithCornerArrow(
                 LineToolIndex() == 1 ? PolylineIcon() : ArrowIcon());
             _mosaicSwitchButton.Content = WithCornerArrow(
@@ -1804,6 +1858,24 @@ public sealed class EditorToolbar
         canvas.Children.Add(blurDot);
         return canvas;
     }
+
+    /// <summary>画笔图标：一条波浪笔迹。</summary>
+    private static Control PenIcon() => new Canvas
+    {
+        Width = 22,
+        Height = 22,
+        Children =
+        {
+            new Avalonia.Controls.Shapes.Path
+            {
+                Data = Geometry.Parse("M 3,17 C 7,8 9,19 13,11 C 15,7 16.5,6 19,4.5"),
+                Stroke = new SolidColorBrush(IconColor),
+                StrokeThickness = 2.2,
+                StrokeLineCap = PenLineCap.Round,
+                StrokeJoin = PenLineJoin.Round,
+            },
+        },
+    };
 
     /// <summary>像素化图标：马赛克棋盘格。</summary>
     private static Control PixelateIcon(double box = 22)

@@ -58,6 +58,7 @@ public partial class App : Application
             SetupTestTextHook(args);
             SetupTestNumberHook(args);
             SetupTestMosaicHook(args);
+            SetupTestPenHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -218,6 +219,36 @@ public partial class App : Application
                 var amount = p.Length > 5 ? double.Parse(p[5]) : 10;
                 var rotation = p.Length > 6 ? double.Parse(p[6]) : 0;
                 _captureController!.TestAddMosaic(rect, blur, amount, rotation);
+            }
+        }, TimeSpan.FromMilliseconds(2200));
+    }
+
+    /// <summary>
+    /// 解析 `--test-pen "x:y;x:y;...[,粗细[,荧光0/1[,RRGGBB]]][|下一条…]"`：
+    /// 2.2s 时添加画笔笔迹（竖线分隔可加多条）。
+    /// </summary>
+    private void SetupTestPenHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-pen");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var groups = args[index + 1].Split('|');
+        DispatcherTimer.RunOnce(() =>
+        {
+            foreach (var group in groups)
+            {
+                var p = group.Split(',');
+                var points = new System.Collections.Generic.List<Avalonia.PixelPoint>();
+                foreach (var pair in p[0].Split(';'))
+                {
+                    var xy = pair.Split(':');
+                    points.Add(new Avalonia.PixelPoint(int.Parse(xy[0]), int.Parse(xy[1])));
+                }
+                var thickness = p.Length > 1 ? double.Parse(p[1]) : 6;
+                var highlight = p.Length > 2 && p[2] == "1";
+                Avalonia.Media.Color? color =
+                    p.Length > 3 && Avalonia.Media.Color.TryParse("#" + p[3], out var c) ? c : null;
+                _captureController!.TestAddPen(points, thickness, highlight, color);
             }
         }, TimeSpan.FromMilliseconds(2200));
     }

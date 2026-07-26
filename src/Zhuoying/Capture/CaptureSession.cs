@@ -124,6 +124,27 @@ public sealed class CaptureSession
         _annotations.Selected = el;
     }
 
+    /// <summary>测试钩子：添加一条画笔笔迹并选中。</summary>
+    public void TestAddPen(
+        IReadOnlyList<PixelPoint> points, double thickness, bool highlight, Color? color)
+    {
+        var el = new PenElement
+        {
+            Frame = _fullFrame,
+            FrameOrigin = _virtualBounds.TopLeft,
+            Style = _editor.CurrentPenStyle with
+            {
+                Thickness = thickness,
+                Highlight = highlight,
+                Color = color ?? _editor.CurrentPenStyle.Color,
+            },
+        };
+        el.Points.AddRange(points);
+        _annotations.Elements.Add(el);
+        _annotations.Push(new AddElementCommand(_annotations, el));
+        _annotations.Selected = el;
+    }
+
     /// <summary>测试钩子：添加一个区域模糊元素并选中（插入底层前缀组）。</summary>
     public void TestAddMosaic(PixelRect bounds, bool blur, double amount, double rotationDeg)
     {

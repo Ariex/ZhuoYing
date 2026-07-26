@@ -78,6 +78,11 @@ public sealed class CaptureController
         _session?.TestAddLine(points, startCap, endCap, startThickness, endThickness,
             spline, lineStyleIndex, opacity);
 
+    /// <summary>测试钩子：添加一条画笔笔迹。</summary>
+    public void TestAddPen(
+        IReadOnlyList<PixelPoint> points, double thickness, bool highlight, Color? color) =>
+        _session?.TestAddPen(points, thickness, highlight, color);
+
     /// <summary>测试钩子：添加一个区域模糊元素。</summary>
     public void TestAddMosaic(PixelRect bounds, bool blur, double amount, double rotationDeg) =>
         _session?.TestAddMosaic(bounds, blur, amount, rotationDeg);
