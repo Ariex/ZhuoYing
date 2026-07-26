@@ -42,6 +42,16 @@ public sealed class AnnotationModel
 
     public void RaiseChanged() => Changed?.Invoke();
 
+    /// <summary>整体重置（右键"重新开始捕捉"）：清空元素、选中态与撤销/重做栈。</summary>
+    public void Reset()
+    {
+        Elements.Clear();
+        _undo.Clear();
+        _redo.Clear();
+        _selected = null;
+        Changed?.Invoke();
+    }
+
     /// <summary>记录一个已生效的命令。</summary>
     public void Push(IEditCommand command)
     {

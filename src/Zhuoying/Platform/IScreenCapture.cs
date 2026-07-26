@@ -24,4 +24,10 @@ public interface IScreenCapture
     /// 再按来源显示器缩放重新标记 DPI（见 BitmapUtil.Crop）。
     /// </summary>
     WriteableBitmap CaptureRegion(PixelRect physicalRegion);
+
+    /// <summary>
+    /// 当前可见顶层窗口矩形快照（自顶向下 Z 序，物理像素，已去阴影/已过滤
+    /// 最小化与隐身窗口）。抓屏瞬间调用，供选区的"窗口吸附"检测。
+    /// </summary>
+    IReadOnlyList<PixelRect> GetVisibleWindowRects();
 }

@@ -24,6 +24,7 @@ public sealed class SettingsWindow : Window
     private readonly TextBlock _hotkeyText;
     private readonly TextBlock _errorText;
     private readonly TextBox _savePathBox;
+    private readonly CheckBox _startupCheck;
     private readonly System.Collections.Generic.List<(TextBox Box, Border Preview)> _colorEditors = [];
     private HotkeySetting? _pending;
 
@@ -40,7 +41,7 @@ public sealed class SettingsWindow : Window
 
         Title = $"捉影 — 设置  v{AppVersion.Display}";
         Width = 400;
-        Height = 560;
+        Height = 600;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         try
@@ -153,6 +154,13 @@ public sealed class SettingsWindow : Window
         DockPanel.SetDock(browseButton, Dock.Right);
         browseButton.Margin = new Thickness(6, 0, 0, 0);
 
+        // 开机自启：注册表 Run 键即持久态（保存时应用）
+        _startupCheck = new CheckBox
+        {
+            Content = "开机自动启动",
+            IsChecked = Zhuoying.Platform.Windows.StartupManager.IsEnabled(),
+        };
+
         Content = new StackPanel
         {
             Margin = new Thickness(20),
@@ -170,6 +178,7 @@ public sealed class SettingsWindow : Window
                 },
                 new TextBlock { Text = "保存目录（Ctrl+S）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
                 savePathRow,
+                _startupCheck,
                 new TextBlock { Text = "标注预设颜色（最多 10 个，留空跳过）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
                 colorGrid,
                 _errorText,
@@ -242,6 +251,7 @@ public sealed class SettingsWindow : Window
             _tryApply(_original);
             return;
         }
+        Zhuoying.Platform.Windows.StartupManager.SetEnabled(_startupCheck.IsChecked == true);
         _save(candidate, colors, _savePathBox.Text?.Trim() ?? "");
         Close();
     }

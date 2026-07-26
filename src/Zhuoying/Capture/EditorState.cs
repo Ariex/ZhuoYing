@@ -342,6 +342,13 @@ public sealed class EditorState
         RaiseStyleChanged();
     }
 
+    /// <summary>清空全部编号序列（右键"重新开始捕捉"，如新会话从 1 起）。</summary>
+    public void ResetNumberSequences()
+    {
+        _nextNumbers.Clear();
+        StyleChanged?.Invoke();
+    }
+
     /// <summary>取出下一个编号并使序列前进一步（放置新徽章时调用）。</summary>
     public int TakeNextNumber(NumberKind kind)
     {

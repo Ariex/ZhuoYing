@@ -67,6 +67,9 @@ public sealed class CaptureSession
         _window.Focus();
     }
 
+    /// <summary>注入抓屏瞬间的可见窗口快照（选区窗口吸附用）。</summary>
+    public void SetWindowRects(IReadOnlyList<PixelRect> rects) => _selection.SetWindowRects(rects);
+
     /// <summary>测试钩子：直接设定选区（虚拟屏幕物理像素）并复制。</summary>
     public void TestCopy(PixelRect physicalRect)
     {
@@ -234,11 +237,13 @@ public sealed class CaptureSession
     /// <summary>测试钩子：添加一个形状元素并选中（免注入验证标注渲染与输出合成）。</summary>
     public void TestAddShape(
         PixelRect bounds, double radiusPercent, bool filled, double thickness,
-        double rotationDeg = 0, int lineStyleIndex = 0, double opacity = 100)
+        double rotationDeg = 0, int lineStyleIndex = 0, double opacity = 100, bool invert = false)
     {
         var el = new ShapeElement
         {
             Bounds = bounds,
+            Frame = _fullFrame,
+            FrameOrigin = _virtualBounds.TopLeft,
             Style = _editor.CurrentStyle with
             {
                 CornerRadiusPercent = radiusPercent,
@@ -247,6 +252,7 @@ public sealed class CaptureSession
                 RotationDeg = rotationDeg,
                 LineStyleIndex = lineStyleIndex,
                 Opacity = opacity,
+                Color = invert ? InvertPaint.Sentinel : _editor.CurrentStyle.Color,
             },
         };
         _annotations.Elements.Add(el);
@@ -266,11 +272,12 @@ public sealed class CaptureSession
             var path = UniquePath(_savePath, $"捉影_{DateTime.Now:yyyyMMdd_HHmmss}.png");
             WritePng(sel, path);
             CloseAll();
+            NotificationToast.Show($"已保存：{path}");
         }
         catch (Exception)
         {
-            // 保存失败不崩溃（目录无权限等）；托盘气泡提示留到生命周期完善阶段
             CloseAll();
+            NotificationToast.Show($"保存失败：无法写入 {_savePath}");
         }
     }
 
@@ -300,10 +307,12 @@ public sealed class CaptureSession
                 return; // 用户取消：回会话
             WritePng(sel, path);
             CloseAll();
+            NotificationToast.Show($"已保存：{path}");
         }
         catch (Exception)
         {
             CloseAll();
+            NotificationToast.Show("另存为失败：目标位置无法写入");
         }
     }
 

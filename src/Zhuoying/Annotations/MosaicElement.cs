@@ -145,32 +145,6 @@ public sealed class MosaicElement : BoxedElement
         _cacheRegion = region;
     }
 
-    /// <summary>旋转后四角的轴对齐包围盒（物理像素）。</summary>
-    private PixelRect RotatedAabb()
-    {
-        if (Style.RotationDeg == 0)
-            return Bounds;
-        var c = Center;
-        double minX = double.MaxValue, minY = double.MaxValue;
-        double maxX = double.MinValue, maxY = double.MinValue;
-        Span<Point> corners =
-        [
-            new(Bounds.X, Bounds.Y), new(Bounds.Right, Bounds.Y),
-            new(Bounds.Right, Bounds.Bottom), new(Bounds.X, Bounds.Bottom),
-        ];
-        foreach (var corner in corners)
-        {
-            var p = RotatePoint(corner, c, Style.RotationDeg);
-            minX = Math.Min(minX, p.X);
-            minY = Math.Min(minY, p.Y);
-            maxX = Math.Max(maxX, p.X);
-            maxY = Math.Max(maxY, p.Y);
-        }
-        return new PixelRect(
-            (int)Math.Floor(minX), (int)Math.Floor(minY),
-            (int)Math.Ceiling(maxX - minX), (int)Math.Ceiling(maxY - minY));
-    }
-
     /// <summary>从冻结帧拷贝区域为紧凑 BGRA 缓冲。</summary>
     private unsafe byte[] CopyRegion(PixelRect region)
     {

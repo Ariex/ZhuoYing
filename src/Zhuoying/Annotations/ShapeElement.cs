@@ -12,6 +12,16 @@ public sealed class ShapeElement : BoxedElement
 {
     public ShapeStyle Style { get; set; } = new();
 
+    /// <summary>冻结帧（"反色"颜色的采样来源，创建时注入；普通颜色不使用）。</summary>
+    public Avalonia.Media.Imaging.WriteableBitmap? Frame { get; set; }
+
+    /// <summary>冻结帧左上角对应的虚拟屏幕物理坐标。</summary>
+    public PixelPoint FrameOrigin { get; set; }
+
+    private Avalonia.Media.Imaging.WriteableBitmap? _invCache;
+    private PixelRect _invRegion;
+    private (PixelRect Bounds, ShapeStyle Style) _invKey;
+
     public override double RotationDeg
     {
         get => Style.RotationDeg;
@@ -31,6 +41,11 @@ public sealed class ShapeElement : BoxedElement
     {
         if (Bounds.Width <= 0 || Bounds.Height <= 0)
             return;
+        if (InvertPaint.IsInvert(Style.Color))
+        {
+            RenderInverted(context, toLocal, scale);
+            return;
+        }
         var r = new Rect(
             toLocal(new Point(Bounds.X, Bounds.Y)),
             toLocal(new Point(Bounds.Right, Bounds.Bottom)));
@@ -63,6 +78,110 @@ public sealed class ShapeElement : BoxedElement
         }
     }
 
+
+    /// <summary>
+    /// "反色"渲染：采样冻结帧 AABB → 逐像素取反 → 按描边环带（填充时整块）
+    /// 圆角矩形几何裁剪绘制。线形/透明度在反色下不适用（几何裁剪无虚线语义）。
+    /// </summary>
+    private void RenderInverted(DrawingContext context, Func<Point, Point> toLocal, double scale)
+    {
+        if (Frame == null)
+            return;
+        var frameRect = new PixelRect(FrameOrigin, Frame.PixelSize);
+        var half = (int)Math.Ceiling(Style.Thickness / 2) + 1;
+        var ra = RotatedAabb();
+        var aabb = new PixelRect(
+            ra.X - half, ra.Y - half, ra.Width + half * 2, ra.Height + half * 2)
+            .Intersect(frameRect);
+        if (aabb.Width <= 0 || aabb.Height <= 0)
+            return;
+        EnsureInvertCache(aabb);
+        if (_invCache == null)
+            return;
+
+        var r = new Rect(
+            toLocal(new Point(Bounds.X, Bounds.Y)),
+            toLocal(new Point(Bounds.Right, Bounds.Bottom)));
+        var dest = new Rect(
+            toLocal(new Point(aabb.X, aabb.Y)),
+            toLocal(new Point(aabb.Right, aabb.Bottom)));
+        var t = Style.Thickness / scale;
+        var rx = Style.CornerRadiusPercent / 100 * r.Width / 2;
+        var ry = Style.CornerRadiusPercent / 100 * r.Height / 2;
+
+        // 描边环带 = 外扩半线宽的圆角矩形 − 内缩半线宽的圆角矩形；填充 = 外块整体
+        var outer = new RectangleGeometry(r.Inflate(t / 2))
+        {
+            RadiusX = rx + t / 2,
+            RadiusY = ry + t / 2,
+        };
+        Geometry clip = outer;
+        if (!Style.Filled)
+        {
+            var innerRect = r.Deflate(t / 2);
+            if (innerRect.Width > 0 && innerRect.Height > 0)
+            {
+                clip = new CombinedGeometry(GeometryCombineMode.Exclude, outer,
+                    new RectangleGeometry(innerRect)
+                    {
+                        RadiusX = Math.Max(0, rx - t / 2),
+                        RadiusY = Math.Max(0, ry - t / 2),
+                    });
+            }
+        }
+        clip.Transform = new MatrixTransform(RotationMatrix(r.Center, Style.RotationDeg));
+        using (context.PushGeometryClip(clip))
+        {
+            context.DrawImage(_invCache,
+                new Rect(0, 0, _invRegion.Width, _invRegion.Height), dest);
+        }
+    }
+
+    private unsafe void EnsureInvertCache(PixelRect region)
+    {
+        if (_invCache != null && _invKey == (Bounds, Style) && _invRegion == region)
+            return;
+        _invKey = (Bounds, Style);
+        _invCache?.Dispose();
+        _invCache = null;
+
+        var buf = new byte[(long)region.Width * region.Height * 4];
+        using (var fb = Frame!.Lock())
+        {
+            var srcX = region.X - FrameOrigin.X;
+            var srcY = region.Y - FrameOrigin.Y;
+            fixed (byte* dst = buf)
+            {
+                for (var y = 0; y < region.Height; y++)
+                {
+                    Buffer.MemoryCopy(
+                        (byte*)fb.Address + (long)(srcY + y) * fb.RowBytes + (long)srcX * 4,
+                        dst + (long)y * region.Width * 4,
+                        region.Width * 4, region.Width * 4);
+                }
+            }
+        }
+        for (var i = 0; i < buf.Length; i += 4)
+        {
+            buf[i] = (byte)(255 - buf[i]);
+            buf[i + 1] = (byte)(255 - buf[i + 1]);
+            buf[i + 2] = (byte)(255 - buf[i + 2]);
+            buf[i + 3] = 0xFF;
+        }
+
+        var bmp = new Avalonia.Media.Imaging.WriteableBitmap(
+            new PixelSize(region.Width, region.Height), new Vector(96, 96),
+            Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Opaque);
+        using (var fb = bmp.Lock())
+        {
+            for (var y = 0; y < region.Height; y++)
+                System.Runtime.InteropServices.Marshal.Copy(
+                    buf, y * region.Width * 4,
+                    IntPtr.Add(fb.Address, y * fb.RowBytes), region.Width * 4);
+        }
+        _invCache = bmp;
+        _invRegion = region;
+    }
 
     private DashStyle? BuildDashStyle()
     {

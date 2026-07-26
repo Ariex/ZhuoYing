@@ -143,8 +143,18 @@
 - [x] 放大镜（PixPin 式）：21×13 源像素 ×10 DIP 网格放大（层级 NearestNeighbor）+ 中心像素黑白双圈 + 坐标/色块/#RRGGBB/C 键复制颜色；光标右下 22 DIP、越界翻转、屏内钳位；仅 选择工具 && 无选中元素 时显示；逐帧仅一次小 DrawImage + 单像素读取，无感知开销
 - [x] 自测参数 `--test-eraser "x:y;...[,粗细]"`（2.6s 晚于画笔钩子）；验证：橡皮竖穿实心笔+荧光+矩形——笔迹断开、矩形完好
 
+## 阶段十一：窗口吸附 / 右键重置 / 反色 / 持久化 / 生命周期 ✅（2026-07-26 完成，里程碑 0.12）
+
+- [x] 窗口吸附：IScreenCapture.GetVisibleWindowRects（EnumWindows + DWM 扩展边界去阴影，滤最小化/隐身/WS_EX_TRANSPARENT 穿透层；抓帧同瞬间快照故不含遮罩自身）→ SelectionController WindowPick 模式（默认态 hover 绿框高亮+尺寸标签、点击吸附、拖拽超阈值转手动框选）
+- [x] 右键重新开始捕捉：会话被改动时右键=整体重置（AnnotationModel.Reset + 选区 ResetToDefault + 编号序列清零 + 回选择工具，吸附恢复）；初始态再右键才退出；原级联保留
+- [x] "反色"颜色：InvertPaint.Sentinel（alpha=1 黑哨兵）；形状=描边环带/填充块圆角几何裁剪取反位图，画笔=荧光同管线反色优先；形状/画笔色板加黑白对角特殊块；`--test-shape` 参数 11 / `--test-pen` 色值 INV
+- [x] presets.json：StyleMemory 落盘（PresetsService + 源生成 + ColorJsonConverter "#AARRGGBB"；会话结束与退出时写、启动读）；注意源生成对 init 属性缺字段=default 而非初始化器值——文件始终全字段写出，手改需保留全部字段
+- [x] 开机自启（StartupManager，HKCU Run 键，设置窗口开关）；通知气泡（NotificationToast 自绘置顶 toast，保存成败/热键冲突接入）
+- [x] Alt+点击下钻重叠元素下一层（直接点击保持"拖动已选元素"语义不变）
+- [x] "连续绘制"开关降级不做（各工具行为已按语义固化）
+
 ## 后续阶段（概要）
 
-- "反色"颜色（底图取反，基建已具备）；样式预设 presets.json
+- 钉屏贴图窗口（F3）——1.0 前最后一个大功能
 - 输出扩展：保存文件、贴图窗口
 - 生命周期完善：开机自启、托盘气泡

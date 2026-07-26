@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Avalonia;
 
 namespace Zhuoying.Capture;
@@ -19,6 +20,8 @@ public sealed class SelectionController
         Resize,
         /// <summary>按在选区外：已预览"包围盒扩展到按下点"，拖拽则转为 Create，直接松开则保留扩展结果。</summary>
         Expand,
+        /// <summary>默认态按在检测到的窗口上：直接松开 = 选区吸附该窗口，拖拽超阈值转 Create。</summary>
+        WindowPick,
     }
 
     /// <summary>8 个手柄的锚点系数（x, y ∈ {0, 0.5, 1}），顺序：四角 + 四边中点。</summary>
@@ -30,6 +33,7 @@ public sealed class SelectionController
     ];
 
     private readonly PixelRect _virtualBounds;
+    private readonly PixelRect _initialSelection;
     private PixelRect _selection;
     private PixelRect _dragStartRect;
     private PixelPoint _dragStart;
@@ -37,11 +41,53 @@ public sealed class SelectionController
     private int _handleIndex;
     private double _dragThreshold; // 物理像素，按下时按来源窗口缩放确定
     private bool _isDefault = true;
+    private IReadOnlyList<PixelRect> _windowRects = [];
+    private PixelRect? _hoverWindow;
 
     public SelectionController(PixelRect virtualBounds, PixelRect initialSelection)
     {
         _virtualBounds = virtualBounds;
+        _initialSelection = initialSelection;
         _selection = initialSelection;
+    }
+
+    /// <summary>抓屏瞬间的可见窗口矩形快照（自顶向下 Z 序），供窗口吸附。</summary>
+    public void SetWindowRects(IReadOnlyList<PixelRect> rects) => _windowRects = rects;
+
+    /// <summary>当前吸附候选窗口（仅默认态可见；按住未拖动时保持显示）。</summary>
+    public PixelRect? HoverWindow =>
+        _isDefault && _mode is DragMode.None or DragMode.WindowPick ? _hoverWindow : null;
+
+    /// <summary>默认态下按指针位置更新吸附候选（命中最上层包含点的窗口）。</summary>
+    public void UpdateHoverWindow(PixelPoint pos)
+    {
+        if (!_isDefault || _mode != DragMode.None)
+            return;
+        PixelRect? hit = null;
+        foreach (var r in _windowRects)
+        {
+            if (r.Contains(pos))
+            {
+                hit = r.Intersect(_virtualBounds);
+                break;
+            }
+        }
+        if (hit != _hoverWindow)
+        {
+            _hoverWindow = hit;
+            Changed?.Invoke();
+        }
+    }
+
+    /// <summary>整体重置回会话初始状态（右键"重新开始捕捉"）：默认全屏选区 + 吸附恢复。</summary>
+    public void ResetToDefault()
+    {
+        _mode = DragMode.None;
+        _selection = _initialSelection;
+        _isDefault = true;
+        _hoverWindow = null;
+        Changed?.Invoke();
+        DragCompleted?.Invoke(_selection);
     }
 
     public PixelRect Selection => _selection;
@@ -76,6 +122,11 @@ public sealed class SelectionController
         {
             _mode = DragMode.Resize;
             _handleIndex = handle;
+        }
+        else if (_isDefault && _hoverWindow != null && _hoverWindow.Value.Contains(pos))
+        {
+            // 默认态按在检测窗口上：直接松开吸附该窗口，拖拽超阈值转手动框选
+            _mode = DragMode.WindowPick;
         }
         else if (_isDefault && _selection.Contains(pos))
         {
@@ -128,6 +179,15 @@ public sealed class SelectionController
                     _selection = FromCorners(_dragStart, pos);
                 }
                 break;
+            case DragMode.WindowPick:
+                if (Math.Abs(pos.X - _dragStart.X) >= _dragThreshold
+                    || Math.Abs(pos.Y - _dragStart.Y) >= _dragThreshold)
+                {
+                    _mode = DragMode.Create;
+                    _hoverWindow = null;
+                    _selection = FromCorners(_dragStart, pos);
+                }
+                break;
         }
         Changed?.Invoke();
     }
@@ -138,7 +198,17 @@ public sealed class SelectionController
             return;
         var mode = _mode;
         _mode = DragMode.None;
-        if (mode == DragMode.Create
+        if (mode == DragMode.WindowPick)
+        {
+            // 点击吸附窗口：选区 = 该窗口矩形
+            if (_hoverWindow is { } hw)
+            {
+                _selection = hw;
+                _isDefault = false;
+                _hoverWindow = null;
+            }
+        }
+        else if (mode == DragMode.Create
             && (_selection.Width < _dragThreshold || _selection.Height < _dragThreshold))
         {
             // 位移过小视为误点击，恢复原选区（不清除默认全屏标记）

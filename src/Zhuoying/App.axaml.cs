@@ -32,6 +32,7 @@ public partial class App : Application
 
             _settingsService = new SettingsService();
             _appSettings = _settingsService.Load();
+            PresetsService.LoadIntoMemory(); // 各工具"上次使用的样式"跨重启恢复
 
             _captureController = new CaptureController(
                 new WindowsScreenCapture(), new WindowsClipboardImage(),
@@ -41,10 +42,16 @@ public partial class App : Application
                     Math.Max(_appSettings.FontSizeMin, _appSettings.FontSizeMax),
                     _appSettings.ResolveSavePath()));
 
+            _captureController.SessionFinished += PresetsService.SaveFromMemory;
+
             _hotkey = new WindowsHotkeyService();
             TryApplyHotkey(_appSettings.Hotkey);
 
-            desktop.Exit += (_, _) => _hotkey?.Dispose();
+            desktop.Exit += (_, _) =>
+            {
+                PresetsService.SaveFromMemory();
+                _hotkey?.Dispose();
+            };
 
             // 开发自测：--test-capture 自动触发一次抓屏；--test-settings 打开设置窗口；
             // --test-copy x,y,w,h 在自动抓屏后直接按虚拟屏幕物理像素设选区并复制（免键鼠注入）
@@ -116,9 +123,10 @@ public partial class App : Application
         var rotation = p.Length > 7 ? double.Parse(p[7]) : 0;
         var lineStyle = p.Length > 8 ? int.Parse(p[8]) : 0;
         var opacity = p.Length > 9 ? double.Parse(p[9]) : 100;
+        var invert = p.Length > 10 && p[10] == "1";
         DispatcherTimer.RunOnce(
             () => _captureController!.TestAddShape(
-                rect, radius, filled, thickness, rotation, lineStyle, opacity),
+                rect, radius, filled, thickness, rotation, lineStyle, opacity, invert),
             TimeSpan.FromMilliseconds(2200));
     }
 
@@ -250,8 +258,11 @@ public partial class App : Application
                 }
                 var thickness = p.Length > 1 ? double.Parse(p[1]) : 6;
                 var highlight = p.Length > 2 && p[2] == "1";
-                Avalonia.Media.Color? color =
-                    p.Length > 3 && Avalonia.Media.Color.TryParse("#" + p[3], out var c) ? c : null;
+                Avalonia.Media.Color? color = p.Length > 3
+                    ? p[3] == "INV"
+                        ? Zhuoying.Annotations.InvertPaint.Sentinel
+                        : Avalonia.Media.Color.TryParse("#" + p[3], out var c) ? c : null
+                    : null;
                 _captureController!.TestAddPen(points, thickness, highlight, color);
             }
         }, TimeSpan.FromMilliseconds(2200));
@@ -318,6 +329,8 @@ public partial class App : Application
             icons[0].ToolTipText = HotkeyRegistered
                 ? $"捉影 v{AppVersion.Display} — {hotkey.Display} 截屏"
                 : $"捉影 v{AppVersion.Display} — 热键 {hotkey.Display} 被占用，请在设置中改键";
+        if (!HotkeyRegistered)
+            NotificationToast.Show($"捉影：热键 {hotkey.Display} 被其他程序占用，请在设置中改键");
         return HotkeyRegistered;
     }
 

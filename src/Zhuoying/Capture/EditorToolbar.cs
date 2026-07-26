@@ -714,7 +714,8 @@ public sealed class EditorToolbar
             _radiusText.Text = ((int)style.CornerRadiusPercent).ToString();
             _rotationText.Text = $"{(int)style.RotationDeg}°";
             _opacityText.Text = ((int)style.Opacity).ToString();
-            RefreshSwatches(_swatchPanel, style.Color, c => _state.ModifyStyle(s => s with { Color = c }));
+            RefreshSwatches(_swatchPanel, style.Color,
+                c => _state.ModifyStyle(s => s with { Color = c }), includeInvert: true);
 
             _lineDashButton.Content = WithChevron(DashPreview(lineStyle.LineStyleIndex, 30));
             _startCapButton.Content = WithChevron(
@@ -771,7 +772,7 @@ public sealed class EditorToolbar
             _penThickText.Text = ((int)penStyle.Thickness).ToString();
             _highlightCheck.IsChecked = penStyle.Highlight;
             RefreshSwatches(_penSwatchPanel, penStyle.Color,
-                c => _state.ModifyPenStyle(s => s with { Color = c }));
+                c => _state.ModifyPenStyle(s => s with { Color = c }), includeInvert: true);
 
             _lineSwitchButton.Content = WithCornerArrow(
                 LineToolIndex() == 1 ? PolylineIcon() : ArrowIcon());
@@ -793,7 +794,8 @@ public sealed class EditorToolbar
         }
     }
 
-    private void RefreshSwatches(StackPanel panel, Color current, Action<Color> pick)
+    private void RefreshSwatches(
+        StackPanel panel, Color current, Action<Color> pick, bool includeInvert = false)
     {
         panel.Children.Clear();
         foreach (var color in _state.PresetColors)
@@ -803,16 +805,40 @@ public sealed class EditorToolbar
             {
                 Padding = new Thickness(0),
                 Background = Brushes.Transparent,
-                Content = RingedSwatch(c, ringed: c == current, size: 16),
+                Content = RingedSwatch(new SolidColorBrush(c), ringed: c == current, size: 16),
             };
             ToolTip.SetTip(button, $"#{c.R:X2}{c.G:X2}{c.B:X2}");
             button.Click += (_, _) => pick(c);
             panel.Children.Add(button);
         }
+        if (includeInvert)
+        {
+            // "反色"特殊块：黑白对角分割，选中同样带彩虹外框
+            var invert = new Button
+            {
+                Padding = new Thickness(0),
+                Background = Brushes.Transparent,
+                Content = RingedSwatch(new LinearGradientBrush
+                {
+                    StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+                    EndPoint = new RelativePoint(1, 1, RelativeUnit.Relative),
+                    GradientStops =
+                    {
+                        new GradientStop(Colors.Black, 0),
+                        new GradientStop(Colors.Black, 0.5),
+                        new GradientStop(Colors.White, 0.5),
+                        new GradientStop(Colors.White, 1),
+                    },
+                }, ringed: InvertPaint.IsInvert(current), size: 16),
+            };
+            ToolTip.SetTip(invert, "反色（对底图取反，深浅背景都清晰）");
+            invert.Click += (_, _) => pick(InvertPaint.Sentinel);
+            panel.Children.Add(invert);
+        }
     }
 
     /// <summary>色块：彩虹渐变外框 + 1px 白色间隔 + 颜色方块（未选中时外框透明占位，布局稳定）。</summary>
-    private static Control RingedSwatch(Color color, bool ringed, double size)
+    private static Control RingedSwatch(IBrush fill, bool ringed, double size)
     {
         var rainbow = new ConicGradientBrush
         {
@@ -844,7 +870,7 @@ public sealed class EditorToolbar
                     Width = size,
                     Height = size,
                     CornerRadius = new CornerRadius(3),
-                    Background = new SolidColorBrush(color),
+                    Background = fill,
                     BorderThickness = new Thickness(1),
                     BorderBrush = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xC8)),
                 },
@@ -1336,7 +1362,7 @@ public sealed class EditorToolbar
             {
                 Padding = new Thickness(0),
                 Background = Brushes.Transparent,
-                Content = RingedSwatch(c, ringed: c == current, size: 13),
+                Content = RingedSwatch(new SolidColorBrush(c), ringed: c == current, size: 13),
             };
             b.Click += (_, _) => pick(c);
             row.Children.Add(b);

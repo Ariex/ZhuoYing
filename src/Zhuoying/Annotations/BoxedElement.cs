@@ -21,6 +21,32 @@ public abstract class BoxedElement : AnnotationElement
     /// <summary>把物理像素点逆旋转到元素未旋转坐标系。</summary>
     public Point ToUnrotated(Point p) => RotatePoint(p, Center, -RotationDeg);
 
+    /// <summary>旋转后四角的轴对齐包围盒（物理像素；采样底图类渲染用）。</summary>
+    protected PixelRect RotatedAabb()
+    {
+        if (RotationDeg == 0)
+            return Bounds;
+        var c = Center;
+        double minX = double.MaxValue, minY = double.MaxValue;
+        double maxX = double.MinValue, maxY = double.MinValue;
+        Span<Point> corners =
+        [
+            new(Bounds.X, Bounds.Y), new(Bounds.Right, Bounds.Y),
+            new(Bounds.Right, Bounds.Bottom), new(Bounds.X, Bounds.Bottom),
+        ];
+        foreach (var corner in corners)
+        {
+            var p = RotatePoint(corner, c, RotationDeg);
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
+        }
+        return new PixelRect(
+            (int)Math.Floor(minX), (int)Math.Floor(minY),
+            (int)Math.Ceiling(maxX - minX), (int)Math.Ceiling(maxY - minY));
+    }
+
     /// <summary>绕 center 旋转 deg 度的变换矩阵。</summary>
     public static Matrix RotationMatrix(Point center, double deg)
     {

@@ -17,6 +17,9 @@ public sealed class CaptureController
     private readonly Func<EditorOptions> _options;
     private CaptureSession? _session;
 
+    /// <summary>一次截屏会话结束（复制/保存/取消后；样式记忆落盘等挂此处）。</summary>
+    public event Action? SessionFinished;
+
     public CaptureController(
         IScreenCapture screenCapture, IClipboardImage clipboard,
         Func<EditorOptions> options)
@@ -51,10 +54,17 @@ public sealed class CaptureController
         // 先冻结再显示遮罩，后续操作全部基于冻结帧（REQUIREMENTS §4.1）；
         // 一次 BitBlt 抓整个虚拟屏幕，保证各屏画面同一时刻
         var frame = _screenCapture.CaptureRegion(virtualBounds);
+        // 同一时刻快照可见窗口（遮罩窗口尚未创建，不会混入）：供选区"窗口吸附"
+        var windowRects = _screenCapture.GetVisibleWindowRects();
 
         var session = new CaptureSession(
             monitors, cursorMonitor, frame, virtualBounds, _clipboard, _options());
-        session.Finished += () => _session = null;
+        session.SetWindowRects(windowRects);
+        session.Finished += () =>
+        {
+            _session = null;
+            SessionFinished?.Invoke();
+        };
         _session = session;
         session.Show();
     }
@@ -108,7 +118,7 @@ public sealed class CaptureController
     /// <summary>测试钩子：添加一个形状标注。</summary>
     public void TestAddShape(
         PixelRect bounds, double radiusPercent, bool filled, double thickness,
-        double rotationDeg = 0, int lineStyleIndex = 0, double opacity = 100) =>
+        double rotationDeg = 0, int lineStyleIndex = 0, double opacity = 100, bool invert = false) =>
         _session?.TestAddShape(
-            bounds, radiusPercent, filled, thickness, rotationDeg, lineStyleIndex, opacity);
+            bounds, radiusPercent, filled, thickness, rotationDeg, lineStyleIndex, opacity, invert);
 }

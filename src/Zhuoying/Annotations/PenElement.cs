@@ -77,7 +77,8 @@ public sealed class PenElement : AnnotationElement
             return;
         var t = Math.Max(1, Style.Thickness) / scale;
 
-        if (!Style.Highlight)
+        // 荧光（底图×色）与反色（底图取反）共用采样位图 + 带状裁剪管线
+        if (!Style.Highlight && !InvertPaint.IsInvert(Style.Color))
         {
             var brush = new SolidColorBrush(Style.Color);
             if (Points.Count == 1)
@@ -94,7 +95,7 @@ public sealed class PenElement : AnnotationElement
             return;
         }
 
-        // ---- 荧光：底图 × 颜色 的位图按笔迹带裁剪 ----
+        // ---- 荧光/反色：处理后的底图位图按笔迹带裁剪 ----
         if (Frame == null)
             return;
         var frameRect = new PixelRect(FrameOrigin, Frame.PixelSize);
@@ -141,13 +142,28 @@ public sealed class PenElement : AnnotationElement
         _cache = null;
 
         var buf = CopyRegion(region);
-        int mb = Style.Color.B, mg = Style.Color.G, mr = Style.Color.R;
-        for (var i = 0; i < buf.Length; i += 4)
+        if (InvertPaint.IsInvert(Style.Color))
         {
-            buf[i] = (byte)(buf[i] * mb / 255);
-            buf[i + 1] = (byte)(buf[i + 1] * mg / 255);
-            buf[i + 2] = (byte)(buf[i + 2] * mr / 255);
-            buf[i + 3] = 0xFF;
+            // 反色：底图取反（反色优先于荧光）
+            for (var i = 0; i < buf.Length; i += 4)
+            {
+                buf[i] = (byte)(255 - buf[i]);
+                buf[i + 1] = (byte)(255 - buf[i + 1]);
+                buf[i + 2] = (byte)(255 - buf[i + 2]);
+                buf[i + 3] = 0xFF;
+            }
+        }
+        else
+        {
+            // 荧光：底图 × 画笔颜色（正片叠底）
+            int mb = Style.Color.B, mg = Style.Color.G, mr = Style.Color.R;
+            for (var i = 0; i < buf.Length; i += 4)
+            {
+                buf[i] = (byte)(buf[i] * mb / 255);
+                buf[i + 1] = (byte)(buf[i + 1] * mg / 255);
+                buf[i + 2] = (byte)(buf[i + 2] * mr / 255);
+                buf[i + 3] = 0xFF;
+            }
         }
 
         var bmp = new WriteableBitmap(

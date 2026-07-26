@@ -33,6 +33,38 @@ public sealed class WindowsScreenCapture : IScreenCapture
         return list;
     }
 
+    public IReadOnlyList<PixelRect> GetVisibleWindowRects()
+    {
+        var list = new List<PixelRect>();
+        Win32.EnumWindows((hWnd, _) =>
+        {
+            // EnumWindows 自顶向下：列表序即 Z 序（靠前在上）
+            if (!Win32.IsWindowVisible(hWnd) || Win32.IsIconic(hWnd))
+                return true;
+            // 点击穿透的 overlay（游戏覆盖层/输入法悬浮层等）：鼠标事件永远
+            // 不属于它，吸附命中它会框住幽灵全屏窗口，必须排除
+            var exStyle = (long)Win32.GetWindowLongPtrW(hWnd, Win32.GWL_EXSTYLE);
+            if ((exStyle & Win32.WS_EX_TRANSPARENT) != 0)
+                return true;
+            // 隐身窗口（UWP 挂起等）：可见标志位仍在但屏幕上没有，必须排除
+            if (Win32.DwmGetWindowAttributeInt(
+                    hWnd, Win32.DWMWA_CLOAKED, out var cloaked, sizeof(int)) == 0
+                && cloaked != 0)
+                return true;
+            // 扩展框架边界：去掉不可见的窗口阴影边（物理像素）
+            if (Win32.DwmGetWindowAttribute(hWnd, Win32.DWMWA_EXTENDED_FRAME_BOUNDS,
+                    out var rect, System.Runtime.InteropServices.Marshal.SizeOf<Win32.RECT>()) != 0)
+                return true;
+            var w = rect.Right - rect.Left;
+            var h = rect.Bottom - rect.Top;
+            if (w < 16 || h < 16)
+                return true;
+            list.Add(new PixelRect(rect.Left, rect.Top, w, h));
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
     private static MonitorInfo ReadMonitor(IntPtr hMonitor)
     {
         var mi = new Win32.MONITORINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Win32.MONITORINFO>() };

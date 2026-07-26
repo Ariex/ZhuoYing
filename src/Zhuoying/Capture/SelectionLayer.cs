@@ -16,6 +16,8 @@ public sealed class SelectionLayer : Control
 {
     private static readonly IBrush MaskBrush = new SolidColorBrush(Color.FromArgb(0x77, 0, 0, 0));
     private static readonly Pen BorderPen = new(new SolidColorBrush(Color.FromRgb(0x2D, 0x8C, 0xF0)), 2);
+    private static readonly Pen HoverWindowPen = new(new SolidColorBrush(Color.FromRgb(0x21, 0xC0, 0x6B)), 3);
+    private static readonly IBrush HoverWindowFill = new SolidColorBrush(Color.FromArgb(0x22, 0x21, 0xC0, 0x6B));
     private static readonly Pen HandlePen = new(new SolidColorBrush(Color.FromRgb(0x2D, 0x8C, 0xF0)), 1.5);
     private static readonly IBrush LabelBackground = new SolidColorBrush(Color.FromArgb(0xCC, 0x20, 0x20, 0x20));
 
@@ -55,6 +57,15 @@ public sealed class SelectionLayer : Control
         if (hasSelection)
             mask.Children.Add(new RectangleGeometry(sel));
         context.DrawGeometry(MaskBrush, null, mask);
+
+        // 窗口吸附候选高亮（绿色框 + 轻微填充；默认态移动鼠标时显示）
+        if (_controller.HoverWindow is { } hover)
+        {
+            var hw = ToLocal(hover);
+            context.DrawRectangle(HoverWindowFill, HoverWindowPen, hw);
+            DrawSizeLabel(context, hw, hover);
+            return; // 吸附提示态不画默认选区的边框手柄，视觉聚焦候选窗口
+        }
 
         if (!hasSelection)
             return;

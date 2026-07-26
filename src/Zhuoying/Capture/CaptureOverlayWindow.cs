@@ -324,7 +324,8 @@ public sealed class CaptureOverlayWindow : Window
 
     private void OnPointerPressedHandler(object? sender, PointerPressedEventArgs e)
     {
-        // 右键：结束文字编辑 → 元素上弹图层菜单 → 取消进行中的绘制 → 取消本次截屏
+        // 右键级联：结束文字编辑 → 元素上弹图层菜单 → 取消进行中的绘制 →
+        // 重新开始捕捉（整体重置，微信截图式）→ 初始态再右键才取消截屏
         if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
         {
             var p = e.GetPosition(this);
@@ -338,8 +339,11 @@ public sealed class CaptureOverlayWindow : Window
             {
                 // 菜单已弹出
             }
-            else if (!_editorLayer.CancelInProgress())
+            else if (!_editorLayer.CancelInProgress()
+                     && !_editorLayer.ResetCaptureIfDirty())
+            {
                 _requestCancel();
+            }
             e.Handled = true;
         }
     }

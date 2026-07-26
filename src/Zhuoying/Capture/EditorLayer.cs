@@ -217,6 +217,27 @@ public sealed class EditorLayer : Control
         return n;
     }
 
+    /// <summary>
+    /// 右键"重新开始捕捉"：会话已被改动（选区/标注/撤销历史）时整体重置回
+    /// 初始状态——清空全部标注与历史、回选择工具、选区恢复默认全屏（窗口吸附
+    /// 随之恢复）。未被改动时返回 false（由上层取消会话）。
+    /// </summary>
+    public bool ResetCaptureIfDirty()
+    {
+        var dirty = !_selection.IsDefaultSelection
+                    || _model.Elements.Count > 0
+                    || _model.CanUndo || _model.CanRedo;
+        if (!dirty)
+            return false;
+        _op = Op.None;
+        _liveElement = null;
+        _model.Reset();
+        _state.Tool = EditorTool.Select;
+        _state.ResetNumberSequences();
+        _selection.ResetToDefault();
+        return true;
+    }
+
     /// <summary>取消进行中的创建（形状拖拽/折线逐点/编号放置）。取消了返回 true。</summary>
     public bool CancelInProgress()
     {
@@ -312,6 +333,8 @@ public sealed class EditorLayer : Control
                     Bounds = new PixelRect(phys, new PixelSize(0, 0)),
                     // 新元素继承当前样式，但旋转角归零
                     Style = _state.CurrentStyle with { RotationDeg = 0 },
+                    Frame = _state.BackgroundFrame,       // "反色"采样来源
+                    FrameOrigin = _state.BackgroundOrigin,
                 };
                 _model.Elements.Add(el);
                 _liveElement = el;
@@ -514,6 +537,13 @@ public sealed class EditorLayer : Control
         }
         if (_model.HitTest(phys, 4 * s) is { } hit)
         {
+            // Alt + 点击：从当前选中元素向下钻取重叠的下一层（到底回绕）
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Alt)
+                && _model.Selected is { } selected
+                && FindHitBelow(phys, 4 * s, selected) is { } below)
+            {
+                hit = below;
+            }
             _model.Selected = hit;
             _state.SyncStyleFromSelection();
             // 文字元素：边框环带拖拽移动；内部点击进入就地编辑（纯文本框语义）
@@ -531,6 +561,23 @@ public sealed class EditorLayer : Control
         _op = Op.Selection;
         _selection.PointerPressed(phys, s);
         e.Pointer.Capture(this);
+    }
+
+    /// <summary>在 current 之下找该点命中的下一个元素（到底后从顶回绕；只有自己则 null）。</summary>
+    private AnnotationElement? FindHitBelow(PixelPoint p, double slop, AnnotationElement current)
+    {
+        var index = _model.Elements.IndexOf(current);
+        for (var i = index - 1; i >= 0; i--)
+        {
+            if (_model.Elements[i].HitTest(p, slop))
+                return _model.Elements[i];
+        }
+        for (var i = _model.Elements.Count - 1; i > index; i--)
+        {
+            if (_model.Elements[i].HitTest(p, slop))
+                return _model.Elements[i];
+        }
+        return null;
     }
 
     private void BeginElementDrag(Op op, AnnotationElement el, PixelPoint phys, PointerPressedEventArgs e)
@@ -557,6 +604,8 @@ public sealed class EditorLayer : Control
         _pointerPhys = phys;
         if (MagnifierActive)
             InvalidateVisual(); // 放大镜跟随光标
+        if (_op == Op.None && _state.Tool == EditorTool.Select)
+            _selection.UpdateHoverWindow(phys); // 窗口吸附候选（仅默认态内部生效）
         switch (_op)
         {
             case Op.None:
