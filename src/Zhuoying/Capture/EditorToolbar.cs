@@ -10,6 +10,8 @@ using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -85,6 +87,11 @@ public sealed class EditorToolbar
     private readonly TextBlock _penThickText;
     private readonly CheckBox _highlightCheck;
     private readonly StackPanel _penSwatchPanel;
+    private readonly Button _stampToolButton;
+    private readonly StackPanel _stampPropertyRow;
+    private readonly Button _stampPickerButton;
+    private readonly TextBlock _stampOpacityText;
+    private static readonly Dictionary<string, WriteableBitmap?> StampThumbCache = new();
     private readonly TextBlock _blockSizeText;
     private readonly TextBlock _blurRadiusText;
     private readonly MiniSlider _blockSlider;
@@ -125,6 +132,7 @@ public sealed class EditorToolbar
 
         _selectButton = ToolButton(SelectIcon(), "选择 (V)", () => _state.Tool = EditorTool.Select);
         _penToolButton = ToolButton(PenIcon(), "画笔 (P)", () => _state.Tool = EditorTool.Pen);
+        _stampToolButton = ToolButton(StampIcon(), "图章 (I)", () => _state.Tool = EditorTool.Stamp);
         _shapeButton = ToolButton(RectIcon(22, 14, 11), "形状 (S)", () => _state.Tool = EditorTool.Shape);
         // 双工具组按钮：斜线分割双图标（左上=默认工具带蓝底，右下=第二工具），
         // 点击激活组内最近使用的工具；组内切换在属性行最左侧的选择器里做
@@ -146,8 +154,8 @@ public sealed class EditorToolbar
             Children =
             {
                 BuildGrip(), Separator(),
-                _selectButton, _penToolButton, _shapeButton, _lineToolButton, _textToolButton,
-                _numberToolButton, _mosaicToolButton, Separator(),
+                _selectButton, _penToolButton, _shapeButton, _stampToolButton, _lineToolButton,
+                _textToolButton, _numberToolButton, _mosaicToolButton, Separator(),
                 _undoButton, _redoButton, Separator(),
                 copyButton, cancelButton,
             },
@@ -429,6 +437,26 @@ public sealed class EditorToolbar
             },
         };
 
+        // ---- 图章属性行 ----
+
+        var stampPickerHost = StampPicker(out _stampPickerButton);
+
+        _stampOpacityText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
+        var stampOpacityButton = SliderPopupButton(
+            OpacityIcon(), _stampOpacityText, "透明度",
+            min: 0, max: 100,
+            get: () => _state.CurrentStampStyle.Opacity,
+            setLive: v => _state.ModifyStampStyleLive(s => s with { Opacity = Math.Round(v) }));
+
+        var stampOutlineSubmenu = SubmenuButton("描边", BuildStampOutlineSubmenu);
+
+        _stampPropertyRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children = { stampPickerHost, Separator(), stampOpacityButton, stampOutlineSubmenu },
+        };
+
         // ---- 编号属性行 ----
 
         var numberStyleHost = PaletteButton(
@@ -535,7 +563,7 @@ public sealed class EditorToolbar
             Children =
             {
                 toolRow, _propertyRow, _linePropertyRow, _textPropertyRow, _numberPropertyRow,
-                _mosaicPropertyRow, _penPropertyRow,
+                _mosaicPropertyRow, _penPropertyRow, _stampPropertyRow,
             },
         };
         Root = new Border
@@ -567,6 +595,8 @@ public sealed class EditorToolbar
                 _state.Tool == EditorTool.Select ? ActiveBackground : Colors.Transparent);
             _penToolButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Pen ? ActiveBackground : Colors.Transparent);
+            _stampToolButton.Background = new SolidColorBrush(
+                _state.Tool == EditorTool.Stamp ? ActiveBackground : Colors.Transparent);
             _shapeButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Shape ? ActiveBackground : Colors.Transparent);
             _lineToolButton.Background = new SolidColorBrush(
@@ -591,6 +621,8 @@ public sealed class EditorToolbar
             var showMosaicProps = _state.Tool is EditorTool.Pixelate or EditorTool.Blur
                                   || _model.Selected is MosaicElement;
             var showPenProps = _state.Tool == EditorTool.Pen || _model.Selected is PenElement;
+            var showStampProps = _state.Tool == EditorTool.Stamp
+                                 || _model.Selected is StampElement;
             // 属性行内只显示当前模式对应的滑条（像素大小 / 模糊半径）
             var showBlockSize = MosaicToolIndex() == 0;
             // 弧线只对折线有意义（箭头固定两点，样条无效果）
@@ -605,6 +637,7 @@ public sealed class EditorToolbar
                 || _numberPropertyRow.IsVisible != showNumberProps
                 || _mosaicPropertyRow.IsVisible != showMosaicProps
                 || _penPropertyRow.IsVisible != showPenProps
+                || _stampPropertyRow.IsVisible != showStampProps
                 || _blockSizeHost.IsVisible != (showBlockSize && !_mosaicChoosing)
                 || _blurRadiusHost.IsVisible != (!showBlockSize && !_mosaicChoosing)
                 || _splineCheck.IsVisible != (showSpline && !_lineChoosing)
@@ -617,6 +650,7 @@ public sealed class EditorToolbar
                 _numberPropertyRow.IsVisible = showNumberProps;
                 _mosaicPropertyRow.IsVisible = showMosaicProps;
                 _penPropertyRow.IsVisible = showPenProps;
+                _stampPropertyRow.IsVisible = showStampProps;
                 // 就地选择态：整行只显示两个工具选择按钮，其余全部隐藏
                 foreach (var child in _linePropertyRow.Children)
                     child.IsVisible = _lineChoosing
@@ -680,6 +714,17 @@ public sealed class EditorToolbar
             _blurRadiusText.Text = ((int)mosaicStyle.BlurRadius).ToString();
             _blockSlider.Value = mosaicStyle.BlockSize;   // 代码赋值不回触发 ValueChanged
             _blurSlider.Value = mosaicStyle.BlurRadius;
+            var stampStyle = _state.CurrentStampStyle;
+            _stampOpacityText.Text = ((int)stampStyle.Opacity).ToString();
+            _stampPickerButton.Content = WithChevron(_state.CurrentStampPath is { } stampPath
+                ? StampThumb(stampPath, 22)
+                : new TextBlock
+                {
+                    Text = "选择素材",
+                    FontSize = 12,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+
             var penStyle = _state.CurrentPenStyle;
             _penThickText.Text = ((int)penStyle.Thickness).ToString();
             _highlightCheck.IsChecked = penStyle.Highlight;
@@ -1405,6 +1450,251 @@ public sealed class EditorToolbar
             e.Pointer.Capture(null);
         };
         return grip;
+    }
+
+    /// <summary>
+    /// 图章素材选择器：按钮显示当前素材缩略图，悬浮/点击弹出素材横条
+    ///（库内全部素材 + 末尾"＋"导入按钮），选中即设为当前素材。
+    /// </summary>
+    private Control StampPicker(out Button button)
+    {
+        var btn = new Button
+        {
+            Height = 30,
+            Padding = new Thickness(5, 0),
+            Background = Brushes.Transparent,
+            CornerRadius = new CornerRadius(5),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        AddStateBackground(btn, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+        AddStateBackground(btn, ":pressed", Color.FromRgb(0xD4, 0xD4, 0xD4));
+
+        var itemsPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var content = new Border
+        {
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(4),
+            BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
+            Cursor = new Cursor(StandardCursorType.Arrow),
+            Child = itemsPanel,
+        };
+        var popup = new Popup
+        {
+            PlacementTarget = btn,
+            Placement = PlacementMode.Bottom,
+            VerticalOffset = 2,
+            IsLightDismissEnabled = false,
+            Child = content,
+        };
+
+        void Rebuild()
+        {
+            itemsPanel.Children.Clear();
+            var current = _state.CurrentStampPath;
+            foreach (var path in StampLibrary.GetStamps())
+            {
+                var p = path;
+                var item = new Button
+                {
+                    Padding = new Thickness(3),
+                    CornerRadius = new CornerRadius(4),
+                    Background = new SolidColorBrush(
+                        p == current ? ActiveBackground : Colors.Transparent),
+                    Content = StampThumb(p, 30),
+                };
+                AddStateBackground(item, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+                item.Click += (_, _) =>
+                {
+                    _state.CurrentStampPath = p;
+                    popup.IsOpen = false;
+                };
+                itemsPanel.Children.Add(item);
+            }
+            var import = new Button
+            {
+                Padding = new Thickness(3),
+                CornerRadius = new CornerRadius(4),
+                Background = Brushes.Transparent,
+                Content = new TextBlock
+                {
+                    Text = "＋",
+                    FontSize = 18,
+                    Width = 30,
+                    TextAlignment = TextAlignment.Center,
+                    Foreground = new SolidColorBrush(IconColor),
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            };
+            AddStateBackground(import, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+            import.Click += async (_, _) =>
+            {
+                // 素材导入：文件复制进库目录（%AppData%\Zhuoying\stamps）
+                var top = TopLevel.GetTopLevel(btn);
+                if (top == null)
+                    return;
+                var files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+                {
+                    Title = "导入图章素材",
+                    AllowMultiple = false,
+                    FileTypeFilter =
+                    [
+                        new FilePickerFileType("图片 (SVG / PNG / JPG)")
+                        {
+                            Patterns = ["*.svg", "*.png", "*.jpg", "*.jpeg"],
+                        },
+                    ],
+                });
+                if (files.Count == 0 || files[0].TryGetLocalPath() is not { } local)
+                    return;
+                if (StampLibrary.Import(local) is { } imported)
+                {
+                    _state.CurrentStampPath = imported;
+                    Rebuild();
+                }
+            };
+            itemsPanel.Children.Add(import);
+        }
+
+        var watchMisses = 0;
+        void WatchClose() => DispatcherTimer.RunOnce(() =>
+        {
+            if (!popup.IsOpen)
+                return;
+            if (btn.IsPointerOver || content.IsPointerOver)
+            {
+                watchMisses = 0;
+                WatchClose();
+                return;
+            }
+            if (++watchMisses < 2)
+            {
+                WatchClose();
+                return;
+            }
+            watchMisses = 0;
+            popup.IsOpen = false;
+        }, TimeSpan.FromMilliseconds(300));
+
+        void Open()
+        {
+            if (popup.IsOpen)
+                return;
+            Rebuild();
+            PopupPlacement.Adjust(popup, btn, content,
+                minHeightDip: 55, minWidthDip: (StampLibrary.GetStamps().Count + 1) * 42 + 12);
+            popup.IsOpen = true;
+            WatchClose();
+        }
+
+        btn.PointerEntered += (_, _) => Open();
+        btn.Click += (_, _) => Open();
+        button = btn;
+        return new Panel { Children = { btn, popup } };
+    }
+
+    /// <summary>素材缩略图（按高度光栅化，静态缓存）。加载失败给灰问号占位。</summary>
+    private static Control StampThumb(string path, double heightDip)
+    {
+        if (!StampThumbCache.TryGetValue(path, out var bmp))
+        {
+            var aspect = StampRasterizer.GetAspect(path) ?? 1.0;
+            const int h = 64;
+            var w = Math.Clamp((int)Math.Round(h * aspect), 8, 256);
+            var raster = StampRasterizer.Load(path, w, h);
+            if (raster != null)
+            {
+                bmp = new WriteableBitmap(
+                    new PixelSize(raster.Width, raster.Height), new Vector(96, 96),
+                    Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Premul);
+                using var fb = bmp.Lock();
+                for (var y = 0; y < raster.Height; y++)
+                    System.Runtime.InteropServices.Marshal.Copy(
+                        raster.Pixels, y * raster.Width * 4,
+                        IntPtr.Add(fb.Address, y * fb.RowBytes), raster.Width * 4);
+            }
+            StampThumbCache[path] = bmp;
+        }
+        if (bmp == null)
+        {
+            return new TextBlock
+            {
+                Text = "?",
+                FontSize = 16,
+                Width = heightDip,
+                TextAlignment = TextAlignment.Center,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+        return new Image
+        {
+            Source = bmp,
+            Height = heightDip,
+            Stretch = Stretch.Uniform,
+        };
+    }
+
+    private Control BuildStampOutlineSubmenu()
+    {
+        var style = _state.CurrentStampStyle;
+        var enable = new CheckBox { Content = "描边轮廓", FontSize = 12, IsChecked = style.OutlineEnabled };
+        enable.IsCheckedChanged += (_, _) =>
+        {
+            var on = enable.IsChecked == true;
+            _state.ModifyStampStyle(s => s with { OutlineEnabled = on });
+        };
+        return new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                enable,
+                ColorRow("颜色", () => _state.CurrentStampStyle.OutlineColor,
+                    c => _state.ModifyStampStyle(s => s with { OutlineColor = c, OutlineEnabled = true }),
+                    c => _state.ModifyStampStyleLive(s => s with { OutlineColor = c, OutlineEnabled = true })),
+                SliderRow("粗细", 1, 40, style.OutlineWidth,
+                    v => _state.ModifyStampStyleLive(s => s with { OutlineWidth = Math.Round(v) })),
+                new TextBlock
+                {
+                    Text = "沿素材不透明轮廓描边（含镂空内缘）",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
+                },
+            },
+        };
+    }
+
+    /// <summary>图章工具图标：相框 + 山丘照片。</summary>
+    private static Control StampIcon()
+    {
+        var stroke = new SolidColorBrush(IconColor);
+        return new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Rectangle
+                {
+                    Width = 16, Height = 13, RadiusX = 2, RadiusY = 2,
+                    Stroke = stroke, StrokeThickness = 2,
+                    [Canvas.LeftProperty] = 3.0, [Canvas.TopProperty] = 4.5,
+                },
+                new Avalonia.Controls.Shapes.Ellipse
+                {
+                    Width = 3, Height = 3, Fill = stroke,
+                    [Canvas.LeftProperty] = 6.5, [Canvas.TopProperty] = 7.0,
+                },
+                new Avalonia.Controls.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 4.5,16 L 9,11 L 12,14 L 14.5,11.5 L 17.5,16"),
+                    Stroke = stroke,
+                    StrokeThickness = 1.8,
+                    StrokeJoin = PenLineJoin.Round,
+                },
+            },
+        };
     }
 
     /// <summary>

@@ -59,6 +59,7 @@ public partial class App : Application
             SetupTestNumberHook(args);
             SetupTestMosaicHook(args);
             SetupTestPenHook(args);
+            SetupTestStampHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -250,6 +251,34 @@ public partial class App : Application
                     p.Length > 3 && Avalonia.Media.Color.TryParse("#" + p[3], out var c) ? c : null;
                 _captureController!.TestAddPen(points, thickness, highlight, color);
             }
+        }, TimeSpan.FromMilliseconds(2200));
+    }
+
+    /// <summary>
+    /// 解析 `--test-stamp "x,y,w,h[,旋转°[,描边宽 0=关[,透明度]]]|素材路径"`：
+    /// 2.2s 时添加图章（路径含空格用 %20；路径为内置素材名如 check 时自动定位库目录）。
+    /// </summary>
+    private void SetupTestStampHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-stamp");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var raw = args[index + 1];
+        var sep = raw.IndexOf('|');
+        var path = (sep >= 0 ? raw[(sep + 1)..] : "check").Replace("%20", " ");
+        if (!System.IO.Path.IsPathRooted(path))
+            path = System.IO.Path.Combine(Zhuoying.Capture.StampLibrary.Directory,
+                path.Contains('.') ? path : path + ".svg");
+        var p = (sep >= 0 ? raw[..sep] : raw).Split(',');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+        var rotation = p.Length > 4 ? double.Parse(p[4]) : 0;
+        var outline = p.Length > 5 ? double.Parse(p[5]) : 0;
+        var opacity = p.Length > 6 ? double.Parse(p[6]) : 100;
+        DispatcherTimer.RunOnce(() =>
+        {
+            _ = Zhuoying.Capture.StampLibrary.GetStamps(); // 触发内置素材首次落盘
+            _captureController!.TestAddStamp(rect, path, rotation, outline, opacity);
         }, TimeSpan.FromMilliseconds(2200));
     }
 

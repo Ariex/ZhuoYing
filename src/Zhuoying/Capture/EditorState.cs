@@ -16,6 +16,7 @@ public enum EditorTool
     Pixelate,
     Blur,
     Pen,
+    Stamp,
 }
 
 /// <summary>编辑器会话级选项（由设置文件提供）。</summary>
@@ -45,6 +46,7 @@ public sealed class EditorState
     private NumberStyle _numberStyle = new();
     private MosaicStyle _mosaicStyle = new();
     private PenStyle _penStyle = new();
+    private StampStyle _stampStyle = new();
     // 每种标号类型独立的下一个编号（切换类型各自续接）
     private readonly Dictionary<NumberKind, int> _nextNumbers = new();
     // 连续修改（滑条拖动）期间的快照，结束时一次性入栈
@@ -57,6 +59,7 @@ public sealed class EditorState
         PresetColors = options.PresetColors;
         FontSizeMin = options.FontSizeMin;
         FontSizeMax = options.FontSizeMax;
+        // 无记忆的槽才套预设首色（有记忆 = 用户上次调过的样式，原样恢复）
         if (PresetColors.Count > 0)
         {
             _currentShapeStyle = _currentShapeStyle with { Color = PresetColors[0] };
@@ -66,10 +69,34 @@ public sealed class EditorState
             _numberStyle = _numberStyle with { Color = PresetColors[0] };
             _penStyle = _penStyle with { Color = PresetColors[0] };
         }
+        _currentShapeStyle = StyleMemory.Shape ?? _currentShapeStyle;
+        _arrowStyle = StyleMemory.Arrow ?? _arrowStyle;
+        _polylineStyle = StyleMemory.Polyline ?? _polylineStyle;
+        _textStyle = StyleMemory.Text ?? _textStyle;
+        _numberStyle = StyleMemory.Number ?? _numberStyle;
+        _mosaicStyle = StyleMemory.Mosaic ?? _mosaicStyle;
+        _penStyle = StyleMemory.Pen ?? _penStyle;
+        _stampStyle = StyleMemory.Stamp ?? _stampStyle;
+        _stampPath = StyleMemory.StampPath;
         _textStyle = _textStyle with
         {
             FontSize = Math.Clamp(_textStyle.FontSize, FontSizeMin, FontSizeMax),
         };
+    }
+
+    /// <summary>把全部样式槽写回跨会话记忆（每次样式变化时调用）。</summary>
+    private void RaiseStyleChanged()
+    {
+        StyleMemory.Shape = _currentShapeStyle;
+        StyleMemory.Arrow = _arrowStyle;
+        StyleMemory.Polyline = _polylineStyle;
+        StyleMemory.Text = _textStyle;
+        StyleMemory.Number = _numberStyle;
+        StyleMemory.Mosaic = _mosaicStyle;
+        StyleMemory.Pen = _penStyle;
+        StyleMemory.Stamp = _stampStyle;
+        StyleMemory.StampPath = _stampPath;
+        StyleChanged?.Invoke();
     }
 
     public IReadOnlyList<Color> PresetColors { get; }
@@ -138,6 +165,22 @@ public sealed class EditorState
     /// <summary>当前画笔样式：选中笔迹时为其样式，否则为待创建样式。</summary>
     public PenStyle CurrentPenStyle => (_model.Selected as PenElement)?.Style ?? _penStyle;
 
+    /// <summary>当前图章样式：选中图章时为其样式，否则为待创建样式。</summary>
+    public StampStyle CurrentStampStyle => (_model.Selected as StampElement)?.Style ?? _stampStyle;
+
+    /// <summary>当前选中的图章素材路径（选中图章元素时跟随元素）。</summary>
+    public string? CurrentStampPath
+    {
+        get => _model.Selected is StampElement el ? el.SourcePath : _stampPath;
+        set
+        {
+            _stampPath = value;
+            RaiseStyleChanged();
+        }
+    }
+
+    private string? _stampPath;
+
     public event Action? ToolChanged;
     public event Action? StyleChanged;
 
@@ -153,7 +196,7 @@ public sealed class EditorState
             el.Style = change(el.Style);
             _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     /// <summary>连续修改中的实时应用（不入栈）。</summary>
@@ -166,7 +209,7 @@ public sealed class EditorState
             _continuousDirty = true;
             _model.RaiseChanged();
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     // ---- 线样式 ----
@@ -180,7 +223,7 @@ public sealed class EditorState
             el.Style = change(el.Style);
             _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     public void ModifyLineStyleLive(Func<LineStyle, LineStyle> change)
@@ -192,7 +235,7 @@ public sealed class EditorState
             _continuousDirty = true;
             _model.RaiseChanged();
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     private void ApplyLineToSlot(Func<LineStyle, LineStyle> change)
@@ -230,7 +273,7 @@ public sealed class EditorState
             el.Style = change(el.Style);
             _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     public void ModifyTextStyleLive(Func<TextStyle, TextStyle> change)
@@ -242,7 +285,7 @@ public sealed class EditorState
             _continuousDirty = true;
             _model.RaiseChanged();
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     // ---- 编号样式与序列 ----
@@ -256,7 +299,7 @@ public sealed class EditorState
             el.Style = change(el.Style);
             _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     public void ModifyNumberStyleLive(Func<NumberStyle, NumberStyle> change)
@@ -268,7 +311,7 @@ public sealed class EditorState
             _continuousDirty = true;
             _model.RaiseChanged();
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     /// <summary>指定标号类型的下一个编号（默认 1）。</summary>
@@ -279,7 +322,7 @@ public sealed class EditorState
     public void SetNextNumber(NumberKind kind, int value)
     {
         _nextNumbers[kind] = Math.Max(1, value);
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     /// <summary>取出下一个编号并使序列前进一步（放置新徽章时调用）。</summary>
@@ -287,7 +330,7 @@ public sealed class EditorState
     {
         var v = NextNumber(kind);
         _nextNumbers[kind] = v + 1;
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
         return v;
     }
 
@@ -302,7 +345,7 @@ public sealed class EditorState
             el.Style = change(el.Style);
             _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     public void ModifyMosaicStyleLive(Func<MosaicStyle, MosaicStyle> change)
@@ -314,7 +357,7 @@ public sealed class EditorState
             _continuousDirty = true;
             _model.RaiseChanged();
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     /// <summary>新建区域模糊元素用的样式（模式由工具决定）。</summary>
@@ -335,7 +378,7 @@ public sealed class EditorState
             el.Style = change(el.Style);
             _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 
     public void ModifyPenStyleLive(Func<PenStyle, PenStyle> change)
@@ -347,7 +390,33 @@ public sealed class EditorState
             _continuousDirty = true;
             _model.RaiseChanged();
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
+    }
+
+    // ---- 图章样式 ----
+
+    public void ModifyStampStyle(Func<StampStyle, StampStyle> change)
+    {
+        _stampStyle = change(CurrentStampStyle);
+        if (_model.Selected is StampElement el)
+        {
+            var before = el.CaptureState();
+            el.Style = change(el.Style);
+            _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
+        }
+        RaiseStyleChanged();
+    }
+
+    public void ModifyStampStyleLive(Func<StampStyle, StampStyle> change)
+    {
+        _stampStyle = change(CurrentStampStyle);
+        if (_model.Selected is StampElement el)
+        {
+            el.Style = change(el.Style);
+            _continuousDirty = true;
+            _model.RaiseChanged();
+        }
+        RaiseStyleChanged();
     }
 
     // ---- 连续修改会话（滑条弹层）----
@@ -401,9 +470,13 @@ public sealed class EditorState
             case PenElement pen:
                 _penStyle = pen.Style;
                 break;
+            case StampElement stamp:
+                _stampStyle = stamp.Style;
+                _stampPath = stamp.SourcePath;
+                break;
             default:
                 return;
         }
-        StyleChanged?.Invoke();
+        RaiseStyleChanged();
     }
 }

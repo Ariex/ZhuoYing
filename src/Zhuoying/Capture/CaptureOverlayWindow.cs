@@ -283,6 +283,11 @@ public sealed class CaptureOverlayWindow : Window
             _editorState.Tool = EditorTool.Pen;
             e.Handled = true;
         }
+        else if (e.Key == Key.I)
+        {
+            _editorState.Tool = EditorTool.Stamp;
+            e.Handled = true;
+        }
     }
 
     private void OnPointerPressedHandler(object? sender, PointerPressedEventArgs e)

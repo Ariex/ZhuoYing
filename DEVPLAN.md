@@ -119,8 +119,19 @@
 - [x] 自测参数 `--test-pen "x:y;...[,粗细[,荧光[,色]]][|…]"`（实心波浪/荧光划字/来回涂抹三场景截图验证：黑字保持黑、白底变色、无孔洞）
 - 注：橡皮将按 §9 组遮罩实现（全部标注一次裁剪，无需逐笔迹处理），画笔无需特殊结构
 
+## 阶段九：图章工具 ✅（2026-07-26 完成，里程碑 0.9）
+
+- [x] StampElement（BoxedElement：移动/8 手柄/旋转全套）；快照存素材路径 + Bounds + 样式
+- [x] 素材库 StampLibrary：目录即库（%AppData%\Zhuoying\stamps）、内置 6 个 SVG（.initialized 标记防复活）、导入=复制入库；工具栏素材选择器（缩略图横条 + ＋导入 StorageProvider 文件对话框）
+- [x] StampRasterizer：SVG 走 Svg.Skia 5.1（SkiaSharp 升 3.119，Avalonia 11.3 渲染实测兼容）按目标尺寸矢量光栅化；PNG/JPG SKBitmap 解码 + Mitchell 重采样；统一输出预乘 BGRA
+- [x] 轮廓描边：alpha chamfer 距离变换（两遍 O(n)），0<d≤宽填色、外缘 1px 渐隐抗锯齿，含镂空内缘；描边铺底 + 主体 premul over + 整体透明度烘入 = **单张合成位图**（零重叠，§11）
+- [x] 尺寸自适应：合成缓存按 (路径,样式) 键 + 尺寸偏离 >25% 重光栅化（SVG 任意放大锐利，700px 星形验证）
+- [x] 命中按合成 alpha 采样（透明区点击穿透，slop 范围粗采样）
+- [x] AOT 回归通过（Svg.Model 有 IL2104 裁剪警告但 SVG 光栅化实测正常）
+- [x] 自测参数 `--test-stamp "x,y,w,h[,旋转[,描边宽[,透明度]]]|素材名或路径"`
+
 ## 后续阶段（概要）
 
-- 标注编辑器其余工具：橡皮、图章（TOOLS-SPEC.md）；"反色"颜色（底图取反，基建已具备）；样式预设 presets.json
+- 标注编辑器其余工具：橡皮（§9 组遮罩）（TOOLS-SPEC.md）；"反色"颜色（底图取反，基建已具备）；样式预设 presets.json
 - 输出扩展：保存文件、贴图窗口
 - 生命周期完善：开机自启、托盘气泡

@@ -25,6 +25,7 @@ public sealed class EditorLayer : Control
         CreatePolyline,
         CreateNumber,
         CreatePen,
+        CreateStamp,
         MoveElement,
         ResizeElement,
         RadiusElement,
@@ -214,7 +215,7 @@ public sealed class EditorLayer : Control
     public bool CancelInProgress()
     {
         if (_op is not (Op.CreateShape or Op.CreateArrow or Op.CreatePolyline or Op.CreateNumber
-                or Op.CreatePen)
+                or Op.CreatePen or Op.CreateStamp)
             || _liveElement == null)
             return false;
         if (_liveElement is NumberElement number) // 序列回退，下次放置沿用本编号
@@ -341,6 +342,32 @@ public sealed class EditorLayer : Control
                 _op = Op.CreatePolyline;
                 _model.RaiseChanged();
                 // 不捕获指针：折线靠点击序列而非拖拽
+                break;
+            }
+            case EditorTool.Stamp:
+            {
+                // 点击盖章（按住可拖到位）：默认高 160 物理像素、宽按素材比例，中心对齐点击点
+                var path = _state.CurrentStampPath
+                           ?? StampLibrary.GetStamps().FirstOrDefault();
+                if (path == null)
+                    break; // 素材库为空
+                _state.CurrentStampPath ??= path;
+                var aspect = Capture.StampRasterizer.GetAspect(path) ?? 1.0;
+                var height = 160;
+                var width = Math.Max(8, (int)Math.Round(height * aspect));
+                var el = new StampElement
+                {
+                    SourcePath = path,
+                    Bounds = new PixelRect(
+                        phys.X - width / 2, phys.Y - height / 2, width, height),
+                    Style = _state.CurrentStampStyle with { RotationDeg = 0 },
+                };
+                _model.Elements.Add(el);
+                _liveElement = el;
+                _op = Op.CreateStamp;
+                _dragStart = phys;
+                _model.RaiseChanged();
+                e.Pointer.Capture(this);
                 break;
             }
             case EditorTool.Pen:
@@ -530,6 +557,13 @@ public sealed class EditorLayer : Control
                 cn.Center = phys;
                 _model.RaiseChanged();
                 break;
+            case Op.CreateStamp when _liveElement is StampElement cst:
+                cst.Bounds = new PixelRect(
+                    new PixelPoint(
+                        phys.X - cst.Bounds.Width / 2, phys.Y - cst.Bounds.Height / 2),
+                    cst.Bounds.Size);
+                _model.RaiseChanged();
+                break;
             case Op.CreatePen when _liveElement is PenElement cp:
             {
                 // 最小步距抽稀（2 物理像素），限制点数
@@ -549,7 +583,9 @@ public sealed class EditorLayer : Control
                     _dragStartBounds.Y + _dragStartBounds.Height / 2.0);
                 var lp = BoxedElement.RotatePoint(
                     new Point(phys.X, phys.Y), center, -rs.RotationDeg);
-                rs.Bounds = ResizeByHandle(lp);
+                // Ctrl + 角控制点 = 等比缩放（所有盒状元素通用）
+                rs.Bounds = ResizeByHandle(lp,
+                    proportional: e.KeyModifiers.HasFlag(KeyModifiers.Control));
                 _dragMutated = true;
                 _model.RaiseChanged();
                 break;
@@ -685,6 +721,10 @@ public sealed class EditorLayer : Control
                 // 单点 = 圆点戳记，同样保留；画笔工具保持激活连续绘制
                 _model.Push(new AddElementCommand(_model, cp));
                 break;
+            case Op.CreateStamp when _liveElement is StampElement cst:
+                _model.Push(new AddElementCommand(_model, cst));
+                // 图章工具保持激活：选一次素材可连续点击盖多个
+                break;
             case Op.MoveElement:
             case Op.ResizeElement:
             case Op.RadiusElement:
@@ -731,7 +771,7 @@ public sealed class EditorLayer : Control
         new PixelPoint(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y)),
         new PixelSize(Math.Abs(b.X - a.X), Math.Abs(b.Y - a.Y)));
 
-    private PixelRect ResizeByHandle(Point pos)
+    private PixelRect ResizeByHandle(Point pos, bool proportional = false)
     {
         var (ax, ay) = SelectionController.HandleAnchors[_handleIndex];
         double left = _dragStartBounds.X, top = _dragStartBounds.Y;
@@ -740,6 +780,22 @@ public sealed class EditorLayer : Control
         else if (ax == 1) right = pos.X;
         if (ay == 0) top = pos.Y;
         else if (ay == 1) bottom = pos.Y;
+
+        // Ctrl + 角控制点：以对角为锚等比缩放（取两轴中较大的缩放因子，可翻转）
+        if (proportional && ax != 0.5 && ay != 0.5
+            && _dragStartBounds.Width > 0 && _dragStartBounds.Height > 0)
+        {
+            var sx = (right - left) / _dragStartBounds.Width;
+            var sy = (bottom - top) / _dragStartBounds.Height;
+            var s = Math.Max(Math.Abs(sx), Math.Abs(sy));
+            var w = _dragStartBounds.Width * s * (sx < 0 ? -1 : 1);
+            var h = _dragStartBounds.Height * s * (sy < 0 ? -1 : 1);
+            if (ax == 0) left = right - w;
+            else right = left + w;
+            if (ay == 0) top = bottom - h;
+            else bottom = top + h;
+        }
+
         return new PixelRect(
             (int)Math.Round(Math.Min(left, right)), (int)Math.Round(Math.Min(top, bottom)),
             (int)Math.Round(Math.Abs(right - left)), (int)Math.Round(Math.Abs(bottom - top)));
@@ -856,7 +912,8 @@ public sealed class EditorLayer : Control
 
         StandardCursorType type;
         if (_state.Tool is EditorTool.Shape or EditorTool.Arrow or EditorTool.Polyline
-            or EditorTool.Number or EditorTool.Pixelate or EditorTool.Blur or EditorTool.Pen)
+            or EditorTool.Number or EditorTool.Pixelate or EditorTool.Blur or EditorTool.Pen
+            or EditorTool.Stamp)
         {
             type = StandardCursorType.Cross;
         }

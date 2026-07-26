@@ -124,6 +124,27 @@ public sealed class CaptureSession
         _annotations.Selected = el;
     }
 
+    /// <summary>测试钩子：添加一个图章并选中。</summary>
+    public void TestAddStamp(
+        PixelRect bounds, string sourcePath, double rotationDeg, double outlineWidth, double opacity)
+    {
+        var el = new StampElement
+        {
+            Bounds = bounds,
+            SourcePath = sourcePath,
+            Style = _editor.CurrentStampStyle with
+            {
+                RotationDeg = rotationDeg,
+                OutlineEnabled = outlineWidth > 0,
+                OutlineWidth = Math.Max(1, outlineWidth),
+                Opacity = opacity,
+            },
+        };
+        _annotations.Elements.Add(el);
+        _annotations.Push(new AddElementCommand(_annotations, el));
+        _annotations.Selected = el;
+    }
+
     /// <summary>测试钩子：添加一条画笔笔迹并选中。</summary>
     public void TestAddPen(
         IReadOnlyList<PixelPoint> points, double thickness, bool highlight, Color? color)
