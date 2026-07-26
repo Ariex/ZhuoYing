@@ -12,6 +12,9 @@ public enum EditorTool
     Arrow,
     Polyline,
     Text,
+    Number,
+    Pixelate,
+    Blur,
 }
 
 /// <summary>编辑器会话级选项（由设置文件提供）。</summary>
@@ -38,6 +41,10 @@ public sealed class EditorState
     };
     private LineStyle _polylineStyle = new();
     private TextStyle _textStyle = new();
+    private NumberStyle _numberStyle = new();
+    private MosaicStyle _mosaicStyle = new();
+    // 每种标号类型独立的下一个编号（切换类型各自续接）
+    private readonly Dictionary<NumberKind, int> _nextNumbers = new();
     // 连续修改（滑条拖动）期间的快照，结束时一次性入栈
     private (AnnotationElement Element, object State)? _continuousSnapshot;
     private bool _continuousDirty;
@@ -54,6 +61,7 @@ public sealed class EditorState
             _arrowStyle = _arrowStyle with { Color = PresetColors[0] };
             _polylineStyle = _polylineStyle with { Color = PresetColors[0] };
             _textStyle = _textStyle with { Color = PresetColors[0] };
+            _numberStyle = _numberStyle with { Color = PresetColors[0] };
         }
         _textStyle = _textStyle with
         {
@@ -71,6 +79,21 @@ public sealed class EditorState
     /// <summary>最近一次使用的线类工具（主工具栏"箭头"按钮的落点）。</summary>
     public EditorTool LastLineTool { get; private set; } = EditorTool.Arrow;
 
+    /// <summary>最近一次使用的区域模糊工具（主工具栏"区域模糊"按钮的落点）。</summary>
+    public EditorTool LastMosaicTool { get; private set; } = EditorTool.Pixelate;
+
+    /// <summary>冻结帧（区域模糊元素的采样来源，会话开始时注入）。</summary>
+    public Avalonia.Media.Imaging.WriteableBitmap? BackgroundFrame { get; private set; }
+
+    /// <summary>冻结帧左上角的虚拟屏幕物理坐标。</summary>
+    public Avalonia.PixelPoint BackgroundOrigin { get; private set; }
+
+    public void SetBackground(Avalonia.Media.Imaging.WriteableBitmap frame, Avalonia.PixelPoint origin)
+    {
+        BackgroundFrame = frame;
+        BackgroundOrigin = origin;
+    }
+
     public EditorTool Tool
     {
         get => _tool;
@@ -81,6 +104,8 @@ public sealed class EditorState
             _tool = value;
             if (value is EditorTool.Arrow or EditorTool.Polyline)
                 LastLineTool = value;
+            if (value is EditorTool.Pixelate or EditorTool.Blur)
+                LastMosaicTool = value;
             if (value != EditorTool.Select)
                 _model.Selected = null;
             ToolChanged?.Invoke();
@@ -100,6 +125,12 @@ public sealed class EditorState
 
     /// <summary>当前文字样式：选中文字元素时为其样式，否则为待创建样式。</summary>
     public TextStyle CurrentTextStyle => (_model.Selected as TextElement)?.Style ?? _textStyle;
+
+    /// <summary>当前编号样式：选中编号元素时为其样式，否则为待创建样式。</summary>
+    public NumberStyle CurrentNumberStyle => (_model.Selected as NumberElement)?.Style ?? _numberStyle;
+
+    /// <summary>当前区域模糊样式：选中模糊元素时为其样式，否则为待创建样式。</summary>
+    public MosaicStyle CurrentMosaicStyle => (_model.Selected as MosaicElement)?.Style ?? _mosaicStyle;
 
     public event Action? ToolChanged;
     public event Action? StyleChanged;
@@ -208,6 +239,85 @@ public sealed class EditorState
         StyleChanged?.Invoke();
     }
 
+    // ---- 编号样式与序列 ----
+
+    public void ModifyNumberStyle(Func<NumberStyle, NumberStyle> change)
+    {
+        _numberStyle = change(CurrentNumberStyle);
+        if (_model.Selected is NumberElement el)
+        {
+            var before = el.CaptureState();
+            el.Style = change(el.Style);
+            _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
+        }
+        StyleChanged?.Invoke();
+    }
+
+    public void ModifyNumberStyleLive(Func<NumberStyle, NumberStyle> change)
+    {
+        _numberStyle = change(CurrentNumberStyle);
+        if (_model.Selected is NumberElement el)
+        {
+            el.Style = change(el.Style);
+            _continuousDirty = true;
+            _model.RaiseChanged();
+        }
+        StyleChanged?.Invoke();
+    }
+
+    /// <summary>指定标号类型的下一个编号（默认 1）。</summary>
+    public int NextNumber(NumberKind kind) =>
+        _nextNumbers.TryGetValue(kind, out var v) ? v : 1;
+
+    /// <summary>设定下一个编号（最小 1）。编号序列独立于撤销栈。</summary>
+    public void SetNextNumber(NumberKind kind, int value)
+    {
+        _nextNumbers[kind] = Math.Max(1, value);
+        StyleChanged?.Invoke();
+    }
+
+    /// <summary>取出下一个编号并使序列前进一步（放置新徽章时调用）。</summary>
+    public int TakeNextNumber(NumberKind kind)
+    {
+        var v = NextNumber(kind);
+        _nextNumbers[kind] = v + 1;
+        StyleChanged?.Invoke();
+        return v;
+    }
+
+    // ---- 区域模糊样式 ----
+
+    public void ModifyMosaicStyle(Func<MosaicStyle, MosaicStyle> change)
+    {
+        _mosaicStyle = change(CurrentMosaicStyle);
+        if (_model.Selected is MosaicElement el)
+        {
+            var before = el.CaptureState();
+            el.Style = change(el.Style);
+            _model.Push(new MutateElementCommand(el, before, el.CaptureState()));
+        }
+        StyleChanged?.Invoke();
+    }
+
+    public void ModifyMosaicStyleLive(Func<MosaicStyle, MosaicStyle> change)
+    {
+        _mosaicStyle = change(CurrentMosaicStyle);
+        if (_model.Selected is MosaicElement el)
+        {
+            el.Style = change(el.Style);
+            _continuousDirty = true;
+            _model.RaiseChanged();
+        }
+        StyleChanged?.Invoke();
+    }
+
+    /// <summary>新建区域模糊元素用的样式（模式由工具决定）。</summary>
+    public MosaicStyle MosaicStyleFor(EditorTool tool) => _mosaicStyle with
+    {
+        Mode = tool == EditorTool.Blur ? MosaicMode.Blur : MosaicMode.Pixelate,
+        RotationDeg = 0,
+    };
+
     // ---- 连续修改会话（滑条弹层）----
 
     /// <summary>连续修改开始（滑条按下/弹层打开时快照）。</summary>
@@ -249,6 +359,12 @@ public sealed class EditorState
                 break;
             case TextElement text:
                 _textStyle = text.Style;
+                break;
+            case NumberElement number:
+                _numberStyle = number.Style;
+                break;
+            case MosaicElement mosaic:
+                _mosaicStyle = mosaic.Style;
                 break;
             default:
                 return;

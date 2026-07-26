@@ -12,6 +12,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Zhuoying.Annotations;
 
 namespace Zhuoying.Capture;
@@ -61,12 +62,55 @@ public sealed class EditorToolbar
     private readonly Button _halignButton;
     private readonly Button _valignButton;
     private readonly StackPanel _textSwatchPanel;
+    private readonly Button _numberToolButton;
+    private readonly StackPanel _numberPropertyRow;
+    private readonly Button _numberStyleButton;
+    private readonly Button _numberKindButton;
+    private readonly TextBlock _numberSizeText;
+    private readonly TextBlock _numberNextText;
+    private readonly StackPanel _numberSwatchPanel;
+    private readonly Button _mosaicToolButton;
+    private readonly Button _lineSwitchButton;
+    private readonly Button _mosaicSwitchButton;
+    private readonly StackPanel _lineChooserPanel;
+    private readonly StackPanel _mosaicChooserPanel;
+    private bool _lineChoosing;
+    private bool _mosaicChoosing;
+    private readonly StackPanel _mosaicPropertyRow;
+    private readonly StackPanel _toolRow;
+    private readonly StackPanel _rowsPanel;
+    private readonly TextBlock _blockSizeText;
+    private readonly TextBlock _blurRadiusText;
+    private readonly MiniSlider _blockSlider;
+    private readonly MiniSlider _blurSlider;
+    private readonly Control _blockSizeHost;
+    private readonly Control _blurRadiusHost;
     private static string[]? _systemFonts;
+
+    /// <summary>标号类型预览字符（顺序与 NumberKind 枚举一致）。</summary>
+    private static readonly string[] KindGlyphs = ["1", "A", "a", "i", "I", "一"];
 
     public Border Root { get; }
 
+    /// <summary>用户已用左侧手柄手动拖过工具条：窗口停止自动停靠，保留用户位置。</summary>
+    public bool ManuallyPositioned { get; private set; }
+
     /// <summary>行显隐等导致尺寸变化（窗口据此重摆工具条位置）。</summary>
     public event Action? LayoutChanged;
+
+    /// <summary>
+    /// 按统一堆叠方向排布内部行序：向上堆叠时工具行放最下、属性行在其上方
+    ///（与更上方的弹层方向一致）；向下则工具行在最上。
+    /// </summary>
+    public void ApplyStackDirection(bool up)
+    {
+        var index = _rowsPanel.Children.IndexOf(_toolRow);
+        var target = up ? _rowsPanel.Children.Count - 1 : 0;
+        if (index == target)
+            return;
+        _rowsPanel.Children.RemoveAt(index);
+        _rowsPanel.Children.Insert(target, _toolRow);
+    }
 
     public EditorToolbar(EditorState state, Action copy, Action cancel)
     {
@@ -75,10 +119,14 @@ public sealed class EditorToolbar
 
         _selectButton = ToolButton(SelectIcon(), "选择 (V)", () => _state.Tool = EditorTool.Select);
         _shapeButton = ToolButton(RectIcon(22, 14, 11), "形状 (S)", () => _state.Tool = EditorTool.Shape);
-        _lineToolButton = ToolButton(ArrowIcon(), "箭头/折线 (A / L)",
+        // 双工具组按钮：斜线分割双图标（左上=默认工具带蓝底，右下=第二工具），
+        // 点击激活组内最近使用的工具；组内切换在属性行最左侧的选择器里做
+        _lineToolButton = ToolButton(LineGroupIcon(), "箭头 / 折线 (A / L)",
             () => _state.Tool = _state.LastLineTool);
-        var lineToolHost = AttachLineToolPopup(_lineToolButton);
         _textToolButton = ToolButton(GlyphIcon("T"), "文字 (T)", () => _state.Tool = EditorTool.Text);
+        _numberToolButton = ToolButton(NumberToolIcon(), "编号 (N)", () => _state.Tool = EditorTool.Number);
+        _mosaicToolButton = ToolButton(MosaicGroupIcon(), "区域模糊：像素化 / 模糊化 (M / B)",
+            () => _state.Tool = _state.LastMosaicTool);
         _undoButton = ToolButton(GlyphIcon("↶"), "撤销 (Ctrl+Z)", () => _model.Undo());
         _redoButton = ToolButton(GlyphIcon("↷"), "重做 (Ctrl+Y)", () => _model.Redo());
         var copyButton = ToolButton(CopyIcon(), "复制 (Enter)", copy);
@@ -90,7 +138,9 @@ public sealed class EditorToolbar
             Spacing = 2,
             Children =
             {
-                _selectButton, _shapeButton, lineToolHost, _textToolButton, Separator(),
+                BuildGrip(), Separator(),
+                _selectButton, _shapeButton, _lineToolButton, _textToolButton, _numberToolButton,
+                _mosaicToolButton, Separator(),
                 _undoButton, _redoButton, Separator(),
                 copyButton, cancelButton,
             },
@@ -221,12 +271,41 @@ public sealed class EditorToolbar
             VerticalAlignment = VerticalAlignment.Center,
         };
 
+        // 组内工具选择器（属性行最左侧，PS 式就地切换）：点击后整行临时变为
+        // [箭头][折线] 两个选择按钮（其余设置隐藏），选定后恢复设置组并切换工具
+        _lineSwitchButton = ToolButton(ArrowIcon(), "切换 箭头 / 折线", () =>
+        {
+            _lineChoosing = true;
+            Refresh();
+        });
+        _lineChooserPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Children =
+            {
+                ToolButton(ArrowIcon(), "箭头 (A)", () =>
+                {
+                    _lineChoosing = false;
+                    _state.Tool = EditorTool.Arrow;
+                    Refresh();
+                }),
+                ToolButton(PolylineIcon(), "折线 (L)", () =>
+                {
+                    _lineChoosing = false;
+                    _state.Tool = EditorTool.Polyline;
+                    Refresh();
+                }),
+            },
+        };
+
         _linePropertyRow = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             Children =
             {
+                _lineSwitchButton, _lineChooserPanel, Separator(),
                 lineDashHost, startCapHost, endCapHost,
                 startThickButton, endThickButton, _splineCheck, lineOpacityButton,
                 Separator(), _lineSwatchPanel, lineColorPick,
@@ -299,6 +378,115 @@ public sealed class EditorToolbar
             },
         };
 
+        // ---- 编号属性行 ----
+
+        var numberStyleHost = PaletteButton(
+            () => _state.CurrentNumberStyle.Hollow ? 1 : 0,
+            i => _state.ModifyNumberStyle(s => s with { Hollow = i == 1 }),
+            2, i => BadgePreview(hollow: i == 1), out _numberStyleButton);
+
+        _numberNextText = new TextBlock
+        {
+            FontSize = 13,
+            MinWidth = 18,
+            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var numberSpinner = NumberSpinnerButton(_numberNextText);
+
+        var numberKindHost = PaletteButton(
+            () => (int)_state.CurrentNumberStyle.Kind,
+            i => _state.ModifyNumberStyle(s => s with { Kind = (NumberKind)i }),
+            KindGlyphs.Length, KindPreview, out _numberKindButton);
+
+        _numberSizeText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 24 };
+        var numberSizeButton = SliderPopupButton(
+            BadgeSizeIcon(), _numberSizeText, "大小",
+            min: 10, max: 200,
+            get: () => _state.CurrentNumberStyle.Diameter,
+            setLive: v => _state.ModifyNumberStyleLive(s => s with { Diameter = Math.Round(v) }));
+
+        _numberSwatchPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var numberColorPick = new ColorPickButton(
+            () => _state.CurrentNumberStyle.Color,
+            c => _state.ModifyNumberStyleLive(s => s with { Color = c }),
+            _state.BeginContinuousStyle, _state.EndContinuousStyle)
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        _numberPropertyRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
+            {
+                numberStyleHost, numberSpinner, numberKindHost, numberSizeButton,
+                Separator(), _numberSwatchPanel, numberColorPick,
+            },
+        };
+
+        // ---- 区域模糊属性行 ----
+
+        // 像素大小/模糊半径滑条直接内联在属性行里（少一级弹层）
+        _blockSizeText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 20 };
+        _blockSlider = new MiniSlider { Minimum = 1, Maximum = 50, Width = 110 };
+        _blockSizeHost = InlineSlider(PixelateIcon(16), "像素大小", _blockSlider, _blockSizeText,
+            v => _state.ModifyMosaicStyleLive(s => s with { BlockSize = Math.Round(v) }));
+
+        _blurRadiusText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 20 };
+        _blurSlider = new MiniSlider { Minimum = 1, Maximum = 50, Width = 110 };
+        _blurRadiusHost = InlineSlider(BlurIcon(16), "模糊半径", _blurSlider, _blurRadiusText,
+            v => _state.ModifyMosaicStyleLive(s => s with { BlurRadius = Math.Round(v) }));
+
+        // 组内工具选择器（属性行最左侧，PS 式就地切换）：像素化↔模糊化
+        _mosaicSwitchButton = ToolButton(PixelateIcon(), "切换 像素化 / 模糊化", () =>
+        {
+            _mosaicChoosing = true;
+            Refresh();
+        });
+        _mosaicChooserPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Children =
+            {
+                ToolButton(PixelateIcon(), "像素化 (M)", () =>
+                {
+                    _mosaicChoosing = false;
+                    _state.Tool = EditorTool.Pixelate;
+                    Refresh();
+                }),
+                ToolButton(BlurIcon(), "模糊化 (B)", () =>
+                {
+                    _mosaicChoosing = false;
+                    _state.Tool = EditorTool.Blur;
+                    Refresh();
+                }),
+            },
+        };
+
+        _mosaicPropertyRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
+            {
+                _mosaicSwitchButton, _mosaicChooserPanel, Separator(),
+                _blockSizeHost, _blurRadiusHost,
+            },
+        };
+
+        _toolRow = toolRow;
+        _rowsPanel = new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                toolRow, _propertyRow, _linePropertyRow, _textPropertyRow, _numberPropertyRow,
+                _mosaicPropertyRow,
+            },
+        };
         Root = new Border
         {
             Background = Brushes.White,
@@ -306,12 +494,10 @@ public sealed class EditorToolbar
             Padding = new Thickness(4),
             BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
             Cursor = new Cursor(StandardCursorType.Arrow),
-            Child = new StackPanel
-            {
-                Spacing = 4,
-                Children = { toolRow, _propertyRow, _linePropertyRow, _textPropertyRow },
-            },
+            Child = _rowsPanel,
         };
+
+        PopupPlacement.ToolbarContainer = Root; // 一级弹层的堆叠基准（跳过整条工具条）
 
         _state.ToolChanged += Refresh;
         _state.StyleChanged += Refresh;
@@ -333,10 +519,13 @@ public sealed class EditorToolbar
             _lineToolButton.Background = new SolidColorBrush(
                 _state.Tool is EditorTool.Arrow or EditorTool.Polyline
                     ? ActiveBackground : Colors.Transparent);
-            _lineToolButton.Content = _state.LastLineTool == EditorTool.Polyline
-                ? PolylineIcon() : ArrowIcon();
             _textToolButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Text ? ActiveBackground : Colors.Transparent);
+            _numberToolButton.Background = new SolidColorBrush(
+                _state.Tool == EditorTool.Number ? ActiveBackground : Colors.Transparent);
+            _mosaicToolButton.Background = new SolidColorBrush(
+                _state.Tool is EditorTool.Pixelate or EditorTool.Blur
+                    ? ActiveBackground : Colors.Transparent);
             _undoButton.IsEnabled = _model.CanUndo;
             _redoButton.IsEnabled = _model.CanRedo;
 
@@ -344,18 +533,48 @@ public sealed class EditorToolbar
             var showLineProps = _state.Tool is EditorTool.Arrow or EditorTool.Polyline
                                 || _model.Selected is LineElement;
             var showTextProps = _state.Tool == EditorTool.Text || _model.Selected is TextElement;
+            var showNumberProps = _state.Tool == EditorTool.Number
+                                  || _model.Selected is NumberElement;
+            var showMosaicProps = _state.Tool is EditorTool.Pixelate or EditorTool.Blur
+                                  || _model.Selected is MosaicElement;
+            // 属性行内只显示当前模式对应的滑条（像素大小 / 模糊半径）
+            var showBlockSize = MosaicToolIndex() == 0;
             // 弧线只对折线有意义（箭头固定两点，样条无效果）
             var showSpline = _state.Tool == EditorTool.Polyline
                              || (_model.Selected is LineElement { IsArrowTool: false });
+            // 行隐藏时退出就地选择态
+            _lineChoosing &= showLineProps;
+            _mosaicChoosing &= showMosaicProps;
             if (_propertyRow.IsVisible != showShapeProps
                 || _linePropertyRow.IsVisible != showLineProps
                 || _textPropertyRow.IsVisible != showTextProps
-                || _splineCheck.IsVisible != showSpline)
+                || _numberPropertyRow.IsVisible != showNumberProps
+                || _mosaicPropertyRow.IsVisible != showMosaicProps
+                || _blockSizeHost.IsVisible != (showBlockSize && !_mosaicChoosing)
+                || _blurRadiusHost.IsVisible != (!showBlockSize && !_mosaicChoosing)
+                || _splineCheck.IsVisible != (showSpline && !_lineChoosing)
+                || _lineChooserPanel.IsVisible != _lineChoosing
+                || _mosaicChooserPanel.IsVisible != _mosaicChoosing)
             {
                 _propertyRow.IsVisible = showShapeProps;
                 _linePropertyRow.IsVisible = showLineProps;
                 _textPropertyRow.IsVisible = showTextProps;
-                _splineCheck.IsVisible = showSpline;
+                _numberPropertyRow.IsVisible = showNumberProps;
+                _mosaicPropertyRow.IsVisible = showMosaicProps;
+                // 就地选择态：整行只显示两个工具选择按钮，其余全部隐藏
+                foreach (var child in _linePropertyRow.Children)
+                    child.IsVisible = _lineChoosing
+                        ? child == _lineChooserPanel : child != _lineChooserPanel;
+                foreach (var child in _mosaicPropertyRow.Children)
+                    child.IsVisible = _mosaicChoosing
+                        ? child == _mosaicChooserPanel : child != _mosaicChooserPanel;
+                if (!_lineChoosing)
+                    _splineCheck.IsVisible = showSpline;
+                if (!_mosaicChoosing)
+                {
+                    _blockSizeHost.IsVisible = showBlockSize;
+                    _blurRadiusHost.IsVisible = !showBlockSize;
+                }
                 LayoutChanged?.Invoke();
             }
 
@@ -390,6 +609,33 @@ public sealed class EditorToolbar
             _valignButton.Content = WithChevron(AlignIcon(horizontal: false, (int)textStyle.VAlign));
             RefreshSwatches(_textSwatchPanel, textStyle.Color,
                 c => _state.ModifyTextStyle(s => s with { Color = c }));
+
+            var numberStyle = _state.CurrentNumberStyle;
+            _numberStyleButton.Content = WithChevron(BadgePreview(numberStyle.Hollow));
+            _numberKindButton.Content = WithChevron(KindPreview((int)numberStyle.Kind));
+            _numberSizeText.Text = ((int)numberStyle.Diameter).ToString();
+            _numberNextText.Text = _state.NextNumber(numberStyle.Kind).ToString();
+            RefreshSwatches(_numberSwatchPanel, numberStyle.Color,
+                c => _state.ModifyNumberStyle(s => s with { Color = c }));
+
+            var mosaicStyle = _state.CurrentMosaicStyle;
+            _blockSizeText.Text = ((int)mosaicStyle.BlockSize).ToString();
+            _blurRadiusText.Text = ((int)mosaicStyle.BlurRadius).ToString();
+            _blockSlider.Value = mosaicStyle.BlockSize;   // 代码赋值不回触发 ValueChanged
+            _blurSlider.Value = mosaicStyle.BlurRadius;
+            _lineSwitchButton.Content = WithCornerArrow(
+                LineToolIndex() == 1 ? PolylineIcon() : ArrowIcon());
+            _mosaicSwitchButton.Content = WithCornerArrow(
+                MosaicToolIndex() == 1 ? BlurIcon() : PixelateIcon());
+            // 就地选择态中高亮当前工具
+            ((Button)_lineChooserPanel.Children[0]).Background = new SolidColorBrush(
+                LineToolIndex() == 0 ? ActiveBackground : Colors.Transparent);
+            ((Button)_lineChooserPanel.Children[1]).Background = new SolidColorBrush(
+                LineToolIndex() == 1 ? ActiveBackground : Colors.Transparent);
+            ((Button)_mosaicChooserPanel.Children[0]).Background = new SolidColorBrush(
+                MosaicToolIndex() == 0 ? ActiveBackground : Colors.Transparent);
+            ((Button)_mosaicChooserPanel.Children[1]).Background = new SolidColorBrush(
+                MosaicToolIndex() == 1 ? ActiveBackground : Colors.Transparent);
         }
         finally
         {
@@ -569,6 +815,7 @@ public sealed class EditorToolbar
                 return;
             _state.BeginContinuousStyle();
             SyncFromState();
+            PopupPlacement.Adjust(popup, button, content, minHeightDip: 90, minWidthDip: 240);
             popup.IsOpen = true;
             WatchClose();
         }
@@ -581,15 +828,25 @@ public sealed class EditorToolbar
             _state.EndContinuousStyle();
         }
 
+        // 弹层不再贴着按钮（跳过整条工具条），指针从按钮移向弹层要跨过工具条条带，
+        // 给一次宽限（连续两轮不在上面才关）避免途中误关
+        var watchMisses = 0;
         void WatchClose() => DispatcherTimer.RunOnce(() =>
         {
             if (!popup.IsOpen)
                 return;
             if (slider.IsDragging || button.IsPointerOver || content.IsPointerOver)
             {
+                watchMisses = 0;
                 WatchClose();
                 return;
             }
+            if (++watchMisses < 2)
+            {
+                WatchClose();
+                return;
+            }
+            watchMisses = 0;
             Close();
         }, TimeSpan.FromMilliseconds(300));
 
@@ -674,15 +931,23 @@ public sealed class EditorToolbar
             }
         }
 
+        var watchMisses = 0;
         void WatchClose() => DispatcherTimer.RunOnce(() =>
         {
             if (!popup.IsOpen)
                 return;
             if (btn.IsPointerOver || content.IsPointerOver)
             {
+                watchMisses = 0;
                 WatchClose();
                 return;
             }
+            if (++watchMisses < 2)
+            {
+                WatchClose();
+                return;
+            }
+            watchMisses = 0;
             popup.IsOpen = false;
         }, TimeSpan.FromMilliseconds(300));
 
@@ -691,6 +956,8 @@ public sealed class EditorToolbar
             if (popup.IsOpen)
                 return;
             Rebuild();
+            PopupPlacement.Adjust(popup, btn, content,
+                minHeightDip: 55, minWidthDip: count * 36 + 12);
             popup.IsOpen = true;
             WatchClose();
         }
@@ -732,15 +999,23 @@ public sealed class EditorToolbar
             Child = content,
         };
 
+        var watchMisses = 0;
         void WatchClose() => DispatcherTimer.RunOnce(() =>
         {
             if (!popup.IsOpen)
                 return;
             if (button.IsPointerOver || content.IsPointerOver)
             {
+                watchMisses = 0;
                 WatchClose();
                 return;
             }
+            if (++watchMisses < 2)
+            {
+                WatchClose();
+                return;
+            }
+            watchMisses = 0;
             popup.IsOpen = false;
         }, TimeSpan.FromMilliseconds(300));
 
@@ -771,6 +1046,7 @@ public sealed class EditorToolbar
                 }
             };
             content.Child = list;
+            PopupPlacement.Adjust(popup, button, content, minHeightDip: 350, minWidthDip: 250);
             popup.IsOpen = true;
             Avalonia.Threading.Dispatcher.UIThread.Post(
                 () => list.ScrollIntoView(list.SelectedItem!), DispatcherPriority.Background);
@@ -827,6 +1103,7 @@ public sealed class EditorToolbar
             _state.EndContinuousStyle();
         }
 
+        var watchMisses = 0;
         void WatchClose() => DispatcherTimer.RunOnce(() =>
         {
             if (!popup.IsOpen)
@@ -834,9 +1111,16 @@ public sealed class EditorToolbar
             // 嵌套的取色弹层打开时（独立视觉根，IsPointerOver 探不到）保持子菜单不关
             if (button.IsPointerOver || content.IsPointerOver || ColorPickButton.AnyOpen)
             {
+                watchMisses = 0;
                 WatchClose();
                 return;
             }
+            if (++watchMisses < 2)
+            {
+                WatchClose();
+                return;
+            }
+            watchMisses = 0;
             Close();
         }, TimeSpan.FromMilliseconds(300));
 
@@ -846,6 +1130,7 @@ public sealed class EditorToolbar
                 return;
             _state.BeginContinuousStyle();
             content.Child = buildContent();
+            PopupPlacement.Adjust(popup, button, content, minHeightDip: 200, minWidthDip: 300);
             popup.IsOpen = true;
             WatchClose();
         }
@@ -980,6 +1265,269 @@ public sealed class EditorToolbar
         };
     }
 
+    /// <summary>
+    /// 工具条左端拖拽手柄（两列圆点）：按住拖动整个工具条；拖过之后
+    /// 窗口不再自动停靠（ManuallyPositioned），位置钳在窗口内。
+    /// </summary>
+    private Control BuildGrip()
+    {
+        var dots = new Canvas { Width = 8, Height = 20 };
+        for (var row = 0; row < 3; row++)
+        {
+            for (var col = 0; col < 2; col++)
+            {
+                var dot = new Avalonia.Controls.Shapes.Ellipse
+                {
+                    Width = 2.6,
+                    Height = 2.6,
+                    Fill = new SolidColorBrush(Color.FromRgb(0xA8, 0xA8, 0xA8)),
+                };
+                Canvas.SetLeft(dot, col * 5);
+                Canvas.SetTop(dot, 1 + row * 7);
+                dots.Children.Add(dot);
+            }
+        }
+        var grip = new Border
+        {
+            Width = 16,
+            Background = Brushes.Transparent, // 命中需要非 null 背景
+            Cursor = new Cursor(StandardCursorType.SizeAll),
+            Child = new Panel
+            {
+                Children = { dots },
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        ToolTip.SetTip(grip, "拖动工具条");
+
+        var dragging = false;
+        var start = new Point();
+        double originX = 0, originY = 0;
+        grip.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(grip).Properties.IsLeftButtonPressed
+                || Root.GetVisualParent() is not Visual parent)
+                return;
+            dragging = true;
+            start = e.GetPosition(parent); // 用父画布坐标：工具条自身移动不影响基准
+            originX = Canvas.GetLeft(Root);
+            originY = Canvas.GetTop(Root);
+            e.Pointer.Capture(grip);
+            e.Handled = true;
+        };
+        grip.PointerMoved += (_, e) =>
+        {
+            if (!dragging || Root.GetVisualParent() is not Control parent)
+                return;
+            var p = e.GetPosition(parent);
+            ManuallyPositioned = true;
+            var nx = Math.Clamp(originX + (p.X - start.X),
+                0, Math.Max(0, parent.Bounds.Width - Root.Bounds.Width));
+            var ny = Math.Clamp(originY + (p.Y - start.Y),
+                0, Math.Max(0, parent.Bounds.Height - Root.Bounds.Height));
+            Canvas.SetLeft(Root, nx);
+            Canvas.SetTop(Root, ny);
+            // 拖动即时刷新弹层统一堆叠方向（含内部行序）
+            if (TopLevel.GetTopLevel(Root) is Window window)
+            {
+                PopupPlacement.UpdateDirection(window, nx, ny, Root.Bounds.Size);
+                ApplyStackDirection(PopupPlacement.StackUp);
+            }
+            e.Handled = true;
+        };
+        grip.PointerReleased += (_, e) =>
+        {
+            dragging = false;
+            e.Pointer.Capture(null);
+        };
+        return grip;
+    }
+
+    /// <summary>
+    /// 行内滑条（图标 + 滑条 + 数值直接嵌在属性行，不经弹层）。
+    /// 拖拽走连续修改会话合并为一条撤销；滚轮/轨道单击立即入栈。
+    /// </summary>
+    private Control InlineSlider(
+        Control icon, string tip, MiniSlider slider, TextBlock valueText, Action<double> setLive)
+    {
+        icon.VerticalAlignment = VerticalAlignment.Center;
+        slider.VerticalAlignment = VerticalAlignment.Center;
+        slider.ValueChanged += v =>
+        {
+            valueText.Text = ((int)v).ToString();
+            _state.BeginContinuousStyle();
+            setLive(v);
+            if (!slider.IsDragging)
+                _state.EndContinuousStyle();
+        };
+        slider.DragEnded += () => _state.EndContinuousStyle();
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { icon, slider, valueText },
+        };
+        ToolTip.SetTip(panel, tip);
+        return panel;
+    }
+
+    /// <summary>
+    /// 下一个编号调节器：数值 + 右侧上下两个小箭头（也支持滚轮）。
+    /// 调整的是当前标号类型"下一个放置"的编号，每种类型序列独立。
+    /// </summary>
+    private Control NumberSpinnerButton(TextBlock valueText)
+    {
+        Button Arrow(string glyph, int delta)
+        {
+            var b = new Button
+            {
+                Width = 16,
+                Height = 13,
+                Padding = new Thickness(0),
+                CornerRadius = new CornerRadius(3),
+                Background = Brushes.Transparent,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Content = new TextBlock
+                {
+                    Text = glyph,
+                    FontSize = 7,
+                    Foreground = new SolidColorBrush(IconColor),
+                },
+            };
+            AddStateBackground(b, ":pointerover", Color.FromRgb(0xEA, 0xEA, 0xEA));
+            AddStateBackground(b, ":pressed", Color.FromRgb(0xD4, 0xD4, 0xD4));
+            b.Click += (_, _) =>
+            {
+                var kind = _state.CurrentNumberStyle.Kind;
+                _state.SetNextNumber(kind, _state.NextNumber(kind) + delta);
+            };
+            return b;
+        }
+
+        var host = new Border
+        {
+            Height = 30,
+            Padding = new Thickness(6, 0),
+            CornerRadius = new CornerRadius(5),
+            Background = Brushes.Transparent,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 3,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    valueText,
+                    new StackPanel
+                    {
+                        Spacing = 1,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Children = { Arrow("▲", 1), Arrow("▼", -1) },
+                    },
+                },
+            },
+        };
+        ToolTip.SetTip(host, "下一个编号");
+        host.PointerWheelChanged += (_, e) =>
+        {
+            var kind = _state.CurrentNumberStyle.Kind;
+            _state.SetNextNumber(kind, _state.NextNumber(kind) + (e.Delta.Y > 0 ? 1 : -1));
+            e.Handled = true;
+        };
+        return host;
+    }
+
+    /// <summary>编号形制预览：实心圆白字 / 空心圆同色字。</summary>
+    private static Control BadgePreview(bool hollow)
+    {
+        var brush = new SolidColorBrush(IconColor);
+        var circle = new Avalonia.Controls.Shapes.Ellipse { Width = 18, Height = 18 };
+        if (hollow)
+        {
+            circle.Stroke = brush;
+            circle.StrokeThickness = 2;
+        }
+        else
+        {
+            circle.Fill = brush;
+        }
+        return new Grid
+        {
+            Width = 18,
+            Height = 18,
+            Children =
+            {
+                circle,
+                new TextBlock
+                {
+                    Text = "1",
+                    FontSize = 10,
+                    FontWeight = FontWeight.Bold,
+                    Foreground = hollow ? brush : Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            },
+        };
+    }
+
+    /// <summary>标号类型预览：单个代表字符（1/A/a/i/I/一）。</summary>
+    private static Control KindPreview(int index) => new TextBlock
+    {
+        Text = KindGlyphs[Math.Clamp(index, 0, KindGlyphs.Length - 1)],
+        FontSize = 14,
+        FontWeight = FontWeight.Bold,
+        Width = 16,
+        TextAlignment = TextAlignment.Center,
+        Foreground = new SolidColorBrush(IconColor),
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    /// <summary>编号工具图标：空心圆 + 数字 1。</summary>
+    private static Control NumberToolIcon()
+    {
+        var brush = new SolidColorBrush(IconColor);
+        return new Grid
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Ellipse
+                {
+                    Width = 19, Height = 19, Stroke = brush, StrokeThickness = 2,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+                new TextBlock
+                {
+                    Text = "1",
+                    FontSize = 11,
+                    FontWeight = FontWeight.Bold,
+                    Foreground = brush,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            },
+        };
+    }
+
+    /// <summary>徽章大小图标：一小一大两个实心圆。</summary>
+    private static Control BadgeSizeIcon()
+    {
+        var brush = new SolidColorBrush(IconColor);
+        var small = new Avalonia.Controls.Shapes.Ellipse { Width = 5, Height = 5, Fill = brush };
+        Canvas.SetLeft(small, 1);
+        Canvas.SetTop(small, 9);
+        var big = new Avalonia.Controls.Shapes.Ellipse { Width = 11, Height = 11, Fill = brush };
+        Canvas.SetLeft(big, 7);
+        Canvas.SetTop(big, 3);
+        return new Canvas { Width = 18, Height = 16, Children = { small, big } };
+    }
+
     /// <summary>对齐图标：三条线按左/中/右（或上/中/下）对齐。</summary>
     private static Control AlignIcon(bool horizontal, int index)
     {
@@ -1092,67 +1640,211 @@ public sealed class EditorToolbar
         }
     }
 
-    /// <summary>给箭头/折线主按钮挂子工具选择弹层（悬浮出现，选择即激活）。</summary>
-    private Control AttachLineToolPopup(Button button)
+    /// <summary>当前线类工具序号（0=箭头 1=折线；选中元素时以元素为准）。</summary>
+    private int LineToolIndex() => _model.Selected is LineElement line
+        ? (line.IsArrowTool ? 0 : 1)
+        : _state.Tool == EditorTool.Polyline
+          || (_state.Tool != EditorTool.Arrow && _state.LastLineTool == EditorTool.Polyline)
+            ? 1 : 0;
+
+    /// <summary>当前区域模糊工具序号（0=像素化 1=模糊化；选中元素时以元素为准）。</summary>
+    private int MosaicToolIndex() => _model.Selected is MosaicElement mosaic
+        ? (mosaic.Style.Mode == MosaicMode.Blur ? 1 : 0)
+        : _state.Tool == EditorTool.Blur
+          || (_state.Tool != EditorTool.Pixelate && _state.LastMosaicTool == EditorTool.Blur)
+            ? 1 : 0;
+
+    /// <summary>PS 式工具组角标：图标右下角的小三角，标示该按钮是多工具组。</summary>
+    private static Control WithCornerArrow(Control icon) => new Panel
     {
-        // 悬浮弹层按钮不能挂 ToolTip（气泡使 IsPointerOver 失真，见 TROUBLESHOOTING §10 旁注）
-        ToolTip.SetTip(button, null);
-
-        var arrowChoice = ToolButton(ArrowIcon(), "", () => { });
-        var polyChoice = ToolButton(PolylineIcon(), "", () => { });
-        ToolTip.SetTip(arrowChoice, null);
-        ToolTip.SetTip(polyChoice, null);
-
-        var content = new Border
+        Children =
         {
-            Background = Brushes.White,
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(4),
-            BoxShadow = BoxShadows.Parse("0 2 8 0 #33000000"),
-            Child = new StackPanel
+            icon,
+            new Avalonia.Controls.Shapes.Polygon
             {
-                Orientation = Orientation.Horizontal,
-                Spacing = 2,
-                Children =
+                Points = [new Point(6, 0), new Point(6, 6), new Point(0, 6)],
+                Fill = new SolidColorBrush(Color.FromRgb(0x6E, 0x6E, 0x6E)),
+                Width = 6,
+                Height = 6,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 1, 1),
+            },
+        },
+    };
+
+    /// <summary>
+    /// 箭头/折线工具组图标：左上小箭头（蓝底 = 默认工具）+ 右下小折线，
+    /// 中间一条斜线分割。
+    /// </summary>
+    private static Control LineGroupIcon()
+    {
+        var brush = new SolidColorBrush(IconColor);
+        var canvas = new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                // 默认工具（箭头）半区蓝底
+                new Avalonia.Controls.Shapes.Polygon
                 {
-                    WithLabel(arrowChoice, "箭头"),
-                    WithLabel(polyChoice, "折线"),
+                    Points = [new Point(0, 0), new Point(19, 0), new Point(0, 19)],
+                    Fill = new SolidColorBrush(ActiveBackground),
+                },
+                // 分割斜线
+                new Avalonia.Controls.Shapes.Line
+                {
+                    StartPoint = new Point(1, 21),
+                    EndPoint = new Point(21, 1),
+                    Stroke = new SolidColorBrush(Color.FromRgb(0xAF, 0xAF, 0xAF)),
+                    StrokeThickness = 1.2,
+                },
+                // 左上小箭头
+                new Avalonia.Controls.Shapes.Line
+                {
+                    StartPoint = new Point(2.5, 9.5),
+                    EndPoint = new Point(6, 6),
+                    Stroke = brush,
+                    StrokeThickness = 1.8,
+                    StrokeLineCap = PenLineCap.Round,
+                },
+                new Avalonia.Controls.Shapes.Polygon
+                {
+                    Points = [new Point(8.6, 3.4), new Point(4.4, 4.9), new Point(7.1, 7.6)],
+                    Fill = brush,
+                },
+                // 右下小折线
+                new Avalonia.Controls.Shapes.Polyline
+                {
+                    Points =
+                    [
+                        new Point(11.5, 19.5), new Point(14.4, 14.8),
+                        new Point(16.8, 17.2), new Point(20, 12.8),
+                    ],
+                    Stroke = brush,
+                    StrokeThickness = 1.8,
+                    StrokeLineCap = PenLineCap.Round,
+                    StrokeJoin = PenLineJoin.Round,
                 },
             },
         };
-        var popup = new Popup
-        {
-            PlacementTarget = button,
-            Placement = PlacementMode.Bottom,
-            VerticalOffset = 2,
-            IsLightDismissEnabled = false,
-            Child = content,
-        };
+        return canvas;
+    }
 
-        void Close() => popup.IsOpen = false;
-        void WatchClose() => DispatcherTimer.RunOnce(() =>
+    /// <summary>像素化/模糊化工具组图标：左上小棋盘格（蓝底 = 默认）+ 右下模糊圆点 + 斜线分割。</summary>
+    private static Control MosaicGroupIcon()
+    {
+        var canvas = new Canvas
         {
-            if (!popup.IsOpen)
-                return;
-            if (button.IsPointerOver || content.IsPointerOver)
+            Width = 22,
+            Height = 22,
+            Children =
             {
-                WatchClose();
-                return;
-            }
-            Close();
-        }, TimeSpan.FromMilliseconds(300));
-
-        button.PointerEntered += (_, _) =>
-        {
-            if (popup.IsOpen)
-                return;
-            popup.IsOpen = true;
-            WatchClose();
+                new Avalonia.Controls.Shapes.Polygon
+                {
+                    Points = [new Point(0, 0), new Point(19, 0), new Point(0, 19)],
+                    Fill = new SolidColorBrush(ActiveBackground),
+                },
+                new Avalonia.Controls.Shapes.Line
+                {
+                    StartPoint = new Point(1, 21),
+                    EndPoint = new Point(21, 1),
+                    Stroke = new SolidColorBrush(Color.FromRgb(0xAF, 0xAF, 0xAF)),
+                    StrokeThickness = 1.2,
+                },
+            },
         };
-        arrowChoice.Click += (_, _) => { _state.Tool = EditorTool.Arrow; Close(); };
-        polyChoice.Click += (_, _) => { _state.Tool = EditorTool.Polyline; Close(); };
+        // 左上 3×3 迷你棋盘格
+        for (var r = 0; r < 3; r++)
+        {
+            for (var c = 0; c < 3; c++)
+            {
+                if ((r + c) % 2 != 0)
+                    continue;
+                var square = new Avalonia.Controls.Shapes.Rectangle
+                {
+                    Width = 2.6,
+                    Height = 2.6,
+                    Fill = new SolidColorBrush(Color.FromArgb(
+                        (byte)((r * 3 + c) % 3 == 0 ? 0xFF : 0x80),
+                        IconColor.R, IconColor.G, IconColor.B)),
+                };
+                Canvas.SetLeft(square, 2.5 + c * 2.6);
+                Canvas.SetTop(square, 2.5 + r * 2.6);
+                canvas.Children.Add(square);
+            }
+        }
+        // 右下模糊圆点
+        var blurDot = new Avalonia.Controls.Shapes.Ellipse
+        {
+            Width = 9,
+            Height = 9,
+            Fill = new RadialGradientBrush
+            {
+                GradientStops =
+                {
+                    new GradientStop(IconColor, 0),
+                    new GradientStop(IconColor, 0.35),
+                    new GradientStop(Color.FromArgb(0x00, IconColor.R, IconColor.G, IconColor.B), 1),
+                },
+            },
+        };
+        Canvas.SetLeft(blurDot, 12);
+        Canvas.SetTop(blurDot, 12);
+        canvas.Children.Add(blurDot);
+        return canvas;
+    }
 
-        return new Panel { Children = { button, popup } };
+    /// <summary>像素化图标：马赛克棋盘格。</summary>
+    private static Control PixelateIcon(double box = 22)
+    {
+        var canvas = new Canvas { Width = box, Height = box };
+        var cell = box / 5.5;
+        var origin = (box - cell * 4) / 2;
+        for (var r = 0; r < 4; r++)
+        {
+            for (var c = 0; c < 4; c++)
+            {
+                if ((r + c) % 2 != 0)
+                    continue;
+                var alpha = (r * 4 + c) % 3 == 0 ? (byte)0xFF : (byte)0x78;
+                var square = new Avalonia.Controls.Shapes.Rectangle
+                {
+                    Width = cell,
+                    Height = cell,
+                    Fill = new SolidColorBrush(Color.FromArgb(
+                        alpha, IconColor.R, IconColor.G, IconColor.B)),
+                };
+                Canvas.SetLeft(square, origin + c * cell);
+                Canvas.SetTop(square, origin + r * cell);
+                canvas.Children.Add(square);
+            }
+        }
+        return canvas;
+    }
+
+    /// <summary>模糊化图标：中心实、边缘虚的径向渐变圆。</summary>
+    private static Control BlurIcon(double box = 22)
+    {
+        var d = box * 0.72;
+        var circle = new Avalonia.Controls.Shapes.Ellipse
+        {
+            Width = d,
+            Height = d,
+            Fill = new RadialGradientBrush
+            {
+                GradientStops =
+                {
+                    new GradientStop(IconColor, 0),
+                    new GradientStop(IconColor, 0.35),
+                    new GradientStop(Color.FromArgb(0x00, IconColor.R, IconColor.G, IconColor.B), 1),
+                },
+            },
+        };
+        Canvas.SetLeft(circle, (box - d) / 2);
+        Canvas.SetTop(circle, (box - d) / 2);
+        return new Canvas { Width = box, Height = box, Children = { circle } };
     }
 
     private static Control WithLabel(Control control, string label) => new StackPanel

@@ -79,15 +79,26 @@ public sealed class CaptureOverlayWindow : Window
         _editorLayer.CommitTextEdit = () => _textEdit.Commit();
         _editorLayer.TextEditRequested += (el, isNew) => _textEdit.Begin(el, isNew);
 
+        // 选中编号徽章时的四角操作按钮（编辑层之上、工具条之下）
+        var numberActions = new NumberActionsPanel(editorState, virtualBounds.TopLeft);
+        GeometryChanged += numberActions.Refresh;
+
         _toolbar = new EditorToolbar(editorState, _requestCopy, requestCancel);
         _toolbar.Root.IsVisible = false;
-        _toolbar.LayoutChanged += RepositionToolbar;
+        // 行显隐刚改完时中间容器的 measure 尚未失效，立刻 Measure 会拿到旧尺寸
+        //（曾导致属性行出现后工具条底边溢出屏幕），投递到布局完成后再重摆
+        _toolbar.LayoutChanged += () => Avalonia.Threading.Dispatcher.UIThread.Post(
+            RepositionToolbar, Avalonia.Threading.DispatcherPriority.Loaded);
         var toolbarCanvas = new Canvas();
         toolbarCanvas.Children.Add(_toolbar.Root);
 
         Content = new Panel
         {
-            Children = { image, annotationLayer, selectionLayer, _editorLayer, textEditHost, toolbarCanvas },
+            Children =
+            {
+                image, annotationLayer, selectionLayer, _editorLayer,
+                textEditHost, numberActions, toolbarCanvas,
+            },
         };
 
         Opened += (_, _) => { ApplyGeometry(); PostGeometryCheck(); };
@@ -141,21 +152,40 @@ public sealed class CaptureOverlayWindow : Window
     {
         if (!_toolbar.Root.IsVisible || _toolbarAnchor.Width <= 0)
             return;
+        // 用户手动拖过工具条后不再自动停靠，但弹层堆叠方向仍按当前位置刷新
+        if (_toolbar.ManuallyPositioned)
+        {
+            PopupPlacement.UpdateDirection(this,
+                Canvas.GetLeft(_toolbar.Root), Canvas.GetTop(_toolbar.Root),
+                _toolbar.Root.Bounds.Size);
+            _toolbar.ApplyStackDirection(PopupPlacement.StackUp);
+            return;
+        }
         var sel = ToLocal(_toolbarAnchor);
         _toolbar.Root.Measure(Size.Infinity);
         var size = _toolbar.Root.DesiredSize;
         const double gap = 6;
 
-        var x = Math.Clamp(sel.Right - size.Width, 0, Math.Max(0, Bounds.Width - size.Width));
+        // 窗口尺寸用虚拟屏幕 / 缩放直接换算——窗口 Bounds 在启动首轮布局前
+        // 还是默认值，据其钳位会把工具条摆到半屏高度（issue-default-toolbar-position）
+        var s = RenderScaling;
+        var winW = _virtualBounds.Width / s;
+        var winH = _virtualBounds.Height / s;
+
+        var x = Math.Clamp(sel.Right - size.Width, 0, Math.Max(0, winW - size.Width));
         var y = sel.Bottom + gap;
-        if (y + size.Height > Bounds.Height)
+        if (y + size.Height > winH)
             y = sel.Y - gap - size.Height;
         if (y < 0)
             y = Math.Max(0, sel.Bottom - gap - size.Height);
-        y = Math.Clamp(y, 0, Math.Max(0, Bounds.Height - size.Height));
+        y = Math.Clamp(y, 0, Math.Max(0, winH - size.Height));
 
         Canvas.SetLeft(_toolbar.Root, x);
         Canvas.SetTop(_toolbar.Root, y);
+        PopupPlacement.UpdateDirection(this, x, y, size);
+        // 向上堆叠时工具条内部行序也翻转（属性行在工具行上方），保证
+        // 工具行 → 属性行 → 弹层 的堆叠方向全程一致
+        _toolbar.ApplyStackDirection(PopupPlacement.StackUp);
     }
 
     /// <summary>虚拟屏幕物理像素矩形 → 窗口 DIP。</summary>
@@ -231,6 +261,21 @@ public sealed class CaptureOverlayWindow : Window
         else if (e.Key == Key.T)
         {
             _editorState.Tool = EditorTool.Text;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.N)
+        {
+            _editorState.Tool = EditorTool.Number;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.M)
+        {
+            _editorState.Tool = EditorTool.Pixelate;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.B)
+        {
+            _editorState.Tool = EditorTool.Blur;
             e.Handled = true;
         }
     }

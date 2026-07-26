@@ -105,6 +105,8 @@ public sealed class ColorPickButton : Panel
             _syncing = true;
             colorView.Color = get();
             _syncing = false;
+            // ColorView 未打开时无模板、测不出尺寸，给足最小估计
+            PopupPlacement.Adjust(popup, button, content, minHeightDip: 500, minWidthDip: 320);
             popup.IsOpen = true;
         };
 

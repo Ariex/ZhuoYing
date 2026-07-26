@@ -82,8 +82,10 @@ public sealed class AnnotationModel
     }
 }
 
-/// <summary>创建元素（构造前元素已加入模型）。</summary>
-public sealed class AddElementCommand(AnnotationModel model, AnnotationElement element) : IEditCommand
+/// <summary>创建元素（构造前元素已加入模型）。index 指定重做时的插入位置（-1 = 追加到顶层），
+/// 区域模糊等"永远在底层"的元素靠它保持层序。</summary>
+public sealed class AddElementCommand(
+    AnnotationModel model, AnnotationElement element, int index = -1) : IEditCommand
 {
     public void Undo()
     {
@@ -92,7 +94,13 @@ public sealed class AddElementCommand(AnnotationModel model, AnnotationElement e
             model.Selected = null;
     }
 
-    public void Redo() => model.Elements.Add(element);
+    public void Redo()
+    {
+        if (index < 0)
+            model.Elements.Add(element);
+        else
+            model.Elements.Insert(Math.Min(index, model.Elements.Count), element);
+    }
 }
 
 /// <summary>删除元素（构造前元素已从模型移除）。</summary>
@@ -115,6 +123,23 @@ public sealed class MutateElementCommand(
     public void Undo() => element.RestoreState(before);
 
     public void Redo() => element.RestoreState(after);
+}
+
+/// <summary>批量状态修改（编号序列重置等；构造前新状态已生效，整体为一个撤销单元）。</summary>
+public sealed class BatchMutateCommand(
+    IReadOnlyList<(AnnotationElement Element, object Before, object After)> items) : IEditCommand
+{
+    public void Undo()
+    {
+        foreach (var (element, before, _) in items)
+            element.RestoreState(before);
+    }
+
+    public void Redo()
+    {
+        foreach (var (element, _, after) in items)
+            element.RestoreState(after);
+    }
 }
 
 /// <summary>调整元素叠放层级（列表序 = 叠放序，靠后在上；构造前已移动到 newIndex）。</summary>

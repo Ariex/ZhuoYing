@@ -23,6 +23,7 @@ public sealed class EditorLayer : Control
         CreateShape,
         CreateArrow,
         CreatePolyline,
+        CreateNumber,
         MoveElement,
         ResizeElement,
         RadiusElement,
@@ -70,6 +71,7 @@ public sealed class EditorLayer : Control
     private AnnotationElement? _liveElement;   // 创建中/编辑中的元素
     private PixelPoint _dragStart;
     private PixelRect _dragStartBounds;
+    private PixelPoint _dragStartCenter;
     private object? _dragBeforeState;
     private PixelPoint[] _dragStartPoints = [];
     private int _handleIndex;
@@ -164,8 +166,12 @@ public sealed class EditorLayer : Control
         _model.Selected = hit;
         _state.SyncStyleFromSelection();
 
+        // 层序调整限定在所属组内：区域模糊只能在底层前缀组里排，
+        // 普通标注只能在其上方排（模糊永远压底，仅在底图之上）
+        var isMosaic = hit is MosaicElement;
+        var groupBottom = isMosaic ? 0 : LeadingMosaicCount();
+        var groupTop = isMosaic ? LeadingMosaicCount() - 1 : _model.Elements.Count - 1;
         var index = _model.Elements.IndexOf(hit);
-        var top = _model.Elements.Count - 1;
         var flyout = new MenuFlyout();
 
         void Add(string header, int target, bool enabled)
@@ -173,8 +179,10 @@ public sealed class EditorLayer : Control
             var item = new MenuItem { Header = header, IsEnabled = enabled };
             item.Click += (_, _) =>
             {
+                var bottom = isMosaic ? 0 : LeadingMosaicCount();
+                var top = isMosaic ? LeadingMosaicCount() - 1 : _model.Elements.Count - 1;
                 var from = _model.Elements.IndexOf(hit);
-                var to = Math.Clamp(target, 0, _model.Elements.Count - 1);
+                var to = Math.Clamp(target, bottom, top);
                 if (from < 0 || from == to)
                     return;
                 _model.Elements.RemoveAt(from);
@@ -184,19 +192,31 @@ public sealed class EditorLayer : Control
             flyout.Items.Add(item);
         }
 
-        Add("上移一层", index + 1, index < top);
-        Add("下移一层", index - 1, index > 0);
-        Add("移到顶层", top, index < top);
-        Add("移到底层", 0, index > 0);
+        Add("上移一层", index + 1, index < groupTop);
+        Add("下移一层", index - 1, index > groupBottom);
+        Add("移到顶层", groupTop, index < groupTop);
+        Add("移到底层", groupBottom, index > groupBottom);
         flyout.ShowAt(this, true);
         return true;
     }
 
-    /// <summary>取消进行中的创建（形状拖拽/折线逐点）。取消了返回 true。</summary>
+    /// <summary>列表头部连续的区域模糊元素个数（"永远在底层"前缀组的边界）。</summary>
+    private int LeadingMosaicCount()
+    {
+        var n = 0;
+        while (n < _model.Elements.Count && _model.Elements[n] is MosaicElement)
+            n++;
+        return n;
+    }
+
+    /// <summary>取消进行中的创建（形状拖拽/折线逐点/编号放置）。取消了返回 true。</summary>
     public bool CancelInProgress()
     {
-        if (_op is not (Op.CreateShape or Op.CreateArrow or Op.CreatePolyline) || _liveElement == null)
+        if (_op is not (Op.CreateShape or Op.CreateArrow or Op.CreatePolyline or Op.CreateNumber)
+            || _liveElement == null)
             return false;
+        if (_liveElement is NumberElement number) // 序列回退，下次放置沿用本编号
+            _state.SetNextNumber(number.Style.Kind, number.Value);
         _model.Elements.Remove(_liveElement);
         _liveElement = null;
         _op = Op.None;
@@ -321,6 +341,58 @@ public sealed class EditorLayer : Control
                 // 不捕获指针：折线靠点击序列而非拖拽
                 break;
             }
+            case EditorTool.Pixelate:
+            case EditorTool.Blur:
+            {
+                // 区域模糊：拖拽创建（同形状），但插入到列表头部的"模糊前缀组"——
+                // 永远在其他标注之下、仅在底图之上
+                var el = new MosaicElement
+                {
+                    Bounds = new PixelRect(phys, new PixelSize(0, 0)),
+                    Style = _state.MosaicStyleFor(_state.Tool),
+                    Frame = _state.BackgroundFrame,
+                    FrameOrigin = _state.BackgroundOrigin,
+                    Seed = Random.Shared.Next(),
+                };
+                _model.Elements.Insert(LeadingMosaicCount(), el);
+                _liveElement = el;
+                _op = Op.CreateShape; // 复用形状创建的拖拽/落地逻辑
+                _dragStart = phys;
+                _model.RaiseChanged();
+                e.Pointer.Capture(this);
+                break;
+            }
+            case EditorTool.Number:
+            {
+                // 点到已有编号时选中它（可直接拖动），避免原地叠章
+                for (var i = _model.Elements.Count - 1; i >= 0; i--)
+                {
+                    if (_model.Elements[i] is NumberElement existing && existing.HitTest(phys, 4 * s))
+                    {
+                        _model.Selected = existing;
+                        _state.SyncStyleFromSelection();
+                        _dragMutated = false;
+                        BeginElementDrag(Op.MoveElement, existing, phys, e);
+                        return;
+                    }
+                }
+                // 点击放置徽章（按住可拖到准确位置再松开），工具保持激活以连续盖章
+                var style = _state.CurrentNumberStyle;
+                _model.Selected = null; // 放置期间不保留上一个徽章的选中框/按钮
+                var el = new NumberElement
+                {
+                    Center = phys,
+                    Style = style,
+                    Value = _state.TakeNextNumber(style.Kind),
+                };
+                _model.Elements.Add(el);
+                _liveElement = el;
+                _op = Op.CreateNumber;
+                _dragStart = phys;
+                _model.RaiseChanged();
+                e.Pointer.Capture(this);
+                break;
+            }
             case EditorTool.Text:
             {
                 // 点击处创建默认大小文本框并立即进入编辑（TOOLS-SPEC §6）；
@@ -407,6 +479,8 @@ public sealed class EditorLayer : Control
             _dragStartBounds = boxed.Bounds;
         if (el is LineElement line)
             _dragStartPoints = line.Points.ToArray();
+        if (el is NumberElement number)
+            _dragStartCenter = number.Center;
         e.Pointer.Capture(this);
     }
 
@@ -419,7 +493,7 @@ public sealed class EditorLayer : Control
             case Op.None:
                 UpdateCursor(phys);
                 return;
-            case Op.CreateShape when _liveElement is ShapeElement cs:
+            case Op.CreateShape when _liveElement is BoxedElement cs:
                 cs.Bounds = FromCorners(_dragStart, phys);
                 _model.RaiseChanged();
                 break;
@@ -429,6 +503,10 @@ public sealed class EditorLayer : Control
                 break;
             case Op.CreatePolyline when _liveElement is LineElement poly:
                 poly.Points[^1] = phys; // 预览段跟随
+                _model.RaiseChanged();
+                break;
+            case Op.CreateNumber when _liveElement is NumberElement cn:
+                cn.Center = phys;
                 _model.RaiseChanged();
                 break;
             case Op.ResizeElement when _liveElement is BoxedElement rs:
@@ -443,6 +521,13 @@ public sealed class EditorLayer : Control
                 _model.RaiseChanged();
                 break;
             }
+            case Op.MoveElement when _liveElement is NumberElement mn:
+                mn.Center = new PixelPoint(
+                    _dragStartCenter.X + (phys.X - _dragStart.X),
+                    _dragStartCenter.Y + (phys.Y - _dragStart.Y));
+                _dragMutated = true;
+                _model.RaiseChanged();
+                break;
             case Op.MoveElement when _liveElement is BoxedElement ms:
                 ms.Bounds = new PixelRect(
                     new PixelPoint(
@@ -512,7 +597,7 @@ public sealed class EditorLayer : Control
 
         switch (op)
         {
-            case Op.CreateShape when _liveElement is ShapeElement cs:
+            case Op.CreateShape when _liveElement is BoxedElement cs:
             {
                 var threshold = 3 * Scaling;
                 if (cs.Bounds.Width < threshold || cs.Bounds.Height < threshold)
@@ -522,7 +607,8 @@ public sealed class EditorLayer : Control
                 }
                 else
                 {
-                    _model.Push(new AddElementCommand(_model, cs));
+                    // 记录插入位置：区域模糊在底层前缀组，重做时保持层序
+                    _model.Push(new AddElementCommand(_model, cs, _model.Elements.IndexOf(cs)));
                     _model.Selected = cs;
                     _state.Tool = EditorTool.Select; // 画完自动回到选择工具（TOOLS-SPEC §1）
                 }
@@ -546,6 +632,11 @@ public sealed class EditorLayer : Control
                 }
                 break;
             }
+            case Op.CreateNumber when _liveElement is NumberElement cn:
+                _model.Push(new AddElementCommand(_model, cn));
+                _model.Selected = cn;
+                // 编号工具保持激活：继续点击放置递增编号
+                break;
             case Op.MoveElement:
             case Op.ResizeElement:
             case Op.RadiusElement:
@@ -716,7 +807,8 @@ public sealed class EditorLayer : Control
         }
 
         StandardCursorType type;
-        if (_state.Tool is EditorTool.Shape or EditorTool.Arrow or EditorTool.Polyline)
+        if (_state.Tool is EditorTool.Shape or EditorTool.Arrow or EditorTool.Polyline
+            or EditorTool.Number or EditorTool.Pixelate or EditorTool.Blur)
         {
             type = StandardCursorType.Cross;
         }
@@ -764,6 +856,14 @@ public sealed class EditorLayer : Control
         // 透明底保证整层可命中
         context.DrawRectangle(Brushes.Transparent, null, new Rect(Bounds.Size));
 
+        // 区域模糊的边界提示常显（含创建拖拽中）：处理后的画面与周围底图边界难辨。
+        // 画在编辑层 = 仅编辑期可见，复制输出仍无描边
+        foreach (var element in _model.Elements)
+        {
+            if (element is MosaicElement mosaic)
+                RenderMosaicBoundary(context, mosaic);
+        }
+
         if (_op is Op.CreateShape or Op.CreateArrow or Op.CreatePolyline)
             return;
 
@@ -776,6 +876,37 @@ public sealed class EditorLayer : Control
             case LineElement line:
                 RenderLineHandles(context, line);
                 break;
+            // 编号不可缩放/旋转：只画虚线选中框（四角按钮由 NumberActionsPanel 叠加）
+            case NumberElement number:
+            {
+                var c = ToLocal(new Point(number.Center.X, number.Center.Y));
+                var half = number.Style.Diameter / Scaling / 2 + NumberActionsPanel.OutlineMargin;
+                context.DrawRectangle(null, SelectionOutlinePen,
+                    new Rect(c.X - half, c.Y - half, half * 2, half * 2));
+                break;
+            }
+        }
+    }
+
+    /// <summary>模糊区域边界：1 物理像素暗灰描边 + 向外渐弱的白色发光（深浅底图都可辨）。</summary>
+    private void RenderMosaicBoundary(DrawingContext context, MosaicElement el)
+    {
+        if (el.Bounds.Width <= 0 || el.Bounds.Height <= 0)
+            return;
+        var local = ToLocal(el.Bounds);
+        var s = Scaling;
+        using (context.PushTransform(BoxedElement.RotationMatrix(local.Center, el.RotationDeg)))
+        {
+            for (var i = 3; i >= 1; i--)
+            {
+                byte alpha = i switch { 3 => 0x14, 2 => 0x2A, _ => 0x46 };
+                context.DrawRectangle(null,
+                    new Pen(new SolidColorBrush(Color.FromArgb(alpha, 0xFF, 0xFF, 0xFF)), 1.6 / s),
+                    local.Inflate(i * 1.3 / s));
+            }
+            context.DrawRectangle(null,
+                new Pen(new SolidColorBrush(Color.FromArgb(0xC8, 0x3C, 0x3C, 0x3C)), 1 / s),
+                local);
         }
     }
 

@@ -48,6 +48,7 @@ public sealed class CaptureSession
 
         _annotations = new AnnotationModel();
         _editor = new EditorState(_annotations, options);
+        _editor.SetBackground(fullFrame, virtualBounds.TopLeft); // 区域模糊的采样来源
 
         _window = new CaptureOverlayWindow(
             fullFrame, virtualBounds, _selection, _editor, Copy, CloseAll);
@@ -115,6 +116,52 @@ public sealed class CaptureSession
                 RotationDeg = rotationDeg,
                 BoxEnabled = boxEnabled,
                 StrokeThickness = strokeThickness,
+            },
+        };
+        _annotations.Elements.Add(el);
+        _annotations.Push(new AddElementCommand(_annotations, el));
+        _annotations.Selected = el;
+    }
+
+    /// <summary>测试钩子：添加一个区域模糊元素并选中（插入底层前缀组）。</summary>
+    public void TestAddMosaic(PixelRect bounds, bool blur, double amount, double rotationDeg)
+    {
+        var el = new MosaicElement
+        {
+            Bounds = bounds,
+            Frame = _fullFrame,
+            FrameOrigin = _virtualBounds.TopLeft,
+            Seed = 12345, // 测试固定种子，截图可复现
+            Style = new MosaicStyle
+            {
+                Mode = blur ? MosaicMode.Blur : MosaicMode.Pixelate,
+                BlockSize = blur ? 10 : amount,
+                BlurRadius = blur ? amount : 10,
+                RotationDeg = rotationDeg,
+            },
+        };
+        var at = 0;
+        while (at < _annotations.Elements.Count && _annotations.Elements[at] is MosaicElement)
+            at++;
+        _annotations.Elements.Insert(at, el);
+        _annotations.Push(new AddElementCommand(_annotations, el, at));
+        _annotations.Selected = el;
+    }
+
+    /// <summary>测试钩子：添加一个编号徽章并选中（免注入验证编号渲染与四角按钮）。</summary>
+    public void TestAddNumber(
+        PixelPoint center, int value, NumberKind kind, double diameter, bool hollow, Color? color)
+    {
+        var el = new NumberElement
+        {
+            Center = center,
+            Value = value,
+            Style = _editor.CurrentNumberStyle with
+            {
+                Kind = kind,
+                Diameter = diameter,
+                Hollow = hollow,
+                Color = color ?? _editor.CurrentNumberStyle.Color,
             },
         };
         _annotations.Elements.Add(el);

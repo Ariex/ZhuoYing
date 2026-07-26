@@ -56,6 +56,8 @@ public partial class App : Application
             SetupTestShapeHook(args);
             SetupTestLineHook(args);
             SetupTestTextHook(args);
+            SetupTestNumberHook(args);
+            SetupTestMosaicHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -165,6 +167,58 @@ public partial class App : Application
         DispatcherTimer.RunOnce(
             () => _captureController!.TestAddText(rect, text, size, rotation, boxed, stroke),
             TimeSpan.FromMilliseconds(2200));
+    }
+
+    /// <summary>
+    /// 解析 `--test-number "x:y[:值[:类型[:直径[:空心0/1[:RRGGBB]]]]][;下一个…]"`：
+    /// 2.2s 时添加编号徽章（类型为 NumberKind 枚举序号，分号分隔可加多个）。
+    /// </summary>
+    private void SetupTestNumberHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-number");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var groups = args[index + 1].Split(';');
+        DispatcherTimer.RunOnce(() =>
+        {
+            foreach (var group in groups)
+            {
+                var p = group.Split(':');
+                var center = new Avalonia.PixelPoint(int.Parse(p[0]), int.Parse(p[1]));
+                var value = p.Length > 2 ? int.Parse(p[2]) : 1;
+                var kind = (Zhuoying.Annotations.NumberKind)(p.Length > 3 ? int.Parse(p[3]) : 0);
+                var diameter = p.Length > 4 ? double.Parse(p[4]) : 48;
+                var hollow = p.Length > 5 && p[5] == "1";
+                Avalonia.Media.Color? color =
+                    p.Length > 6 && Avalonia.Media.Color.TryParse("#" + p[6], out var c) ? c : null;
+                _captureController!.TestAddNumber(center, value, kind, diameter, hollow, color);
+            }
+        }, TimeSpan.FromMilliseconds(2200));
+    }
+
+    /// <summary>
+    /// 解析 `--test-mosaic "x,y,w,h[,模糊0/1[,强度[,旋转°]]][;下一个…]"`：
+    /// 2.2s 时添加区域模糊（强度 = 像素大小或模糊半径，默认 10）。
+    /// </summary>
+    private void SetupTestMosaicHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-mosaic");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var groups = args[index + 1].Split(';');
+        DispatcherTimer.RunOnce(() =>
+        {
+            foreach (var group in groups)
+            {
+                var p = group.Split(',');
+                var rect = new Avalonia.PixelRect(
+                    int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+                var blur = p.Length > 4 && p[4] == "1";
+                var amount = p.Length > 5 ? double.Parse(p[5]) : 10;
+                var rotation = p.Length > 6 ? double.Parse(p[6]) : 0;
+                _captureController!.TestAddMosaic(rect, blur, amount, rotation);
+            }
+        }, TimeSpan.FromMilliseconds(2200));
     }
 
     /// <summary>注册（或改绑）截屏热键并同步托盘提示文案。</summary>

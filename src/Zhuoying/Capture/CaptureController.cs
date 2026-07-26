@@ -78,6 +78,16 @@ public sealed class CaptureController
         _session?.TestAddLine(points, startCap, endCap, startThickness, endThickness,
             spline, lineStyleIndex, opacity);
 
+    /// <summary>测试钩子：添加一个区域模糊元素。</summary>
+    public void TestAddMosaic(PixelRect bounds, bool blur, double amount, double rotationDeg) =>
+        _session?.TestAddMosaic(bounds, blur, amount, rotationDeg);
+
+    /// <summary>测试钩子：添加一个编号徽章。</summary>
+    public void TestAddNumber(
+        PixelPoint center, int value, Annotations.NumberKind kind,
+        double diameter, bool hollow, Color? color) =>
+        _session?.TestAddNumber(center, value, kind, diameter, hollow, color);
+
     /// <summary>测试钩子：添加一个形状标注。</summary>
     public void TestAddShape(
         PixelRect bounds, double radiusPercent, bool filled, double thickness,
