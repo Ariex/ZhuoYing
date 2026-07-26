@@ -78,6 +78,10 @@ public sealed class CaptureController
         _session?.TestAddLine(points, startCap, endCap, startThickness, endThickness,
             spline, lineStyleIndex, opacity);
 
+    /// <summary>测试钩子：添加一条橡皮擦除笔迹。</summary>
+    public void TestAddEraser(IReadOnlyList<PixelPoint> points, double thickness) =>
+        _session?.TestAddEraser(points, thickness);
+
     /// <summary>测试钩子：添加一个图章。</summary>
     public void TestAddStamp(
         PixelRect bounds, string sourcePath, double rotationDeg, double outlineWidth, double opacity) =>

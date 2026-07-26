@@ -60,6 +60,7 @@ public partial class App : Application
             SetupTestMosaicHook(args);
             SetupTestPenHook(args);
             SetupTestStampHook(args);
+            SetupTestEraserHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -280,6 +281,26 @@ public partial class App : Application
             _ = Zhuoying.Capture.StampLibrary.GetStamps(); // 触发内置素材首次落盘
             _captureController!.TestAddStamp(rect, path, rotation, outline, opacity);
         }, TimeSpan.FromMilliseconds(2200));
+    }
+
+    /// <summary>解析 `--test-eraser "x:y;x:y;...[,粗细]"`：2.6s 时添加橡皮擦除笔迹
+    ///（晚于其他元素钩子的 2.2s，保证先有画笔再擦）。</summary>
+    private void SetupTestEraserHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-eraser");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var p = args[index + 1].Split(',');
+        var points = new System.Collections.Generic.List<Avalonia.PixelPoint>();
+        foreach (var pair in p[0].Split(';'))
+        {
+            var xy = pair.Split(':');
+            points.Add(new Avalonia.PixelPoint(int.Parse(xy[0]), int.Parse(xy[1])));
+        }
+        var thickness = p.Length > 1 ? double.Parse(p[1]) : 24;
+        DispatcherTimer.RunOnce(
+            () => _captureController!.TestAddEraser(points, thickness),
+            TimeSpan.FromMilliseconds(2600));
     }
 
     /// <summary>注册（或改绑）截屏热键并同步托盘提示文案。</summary>

@@ -19,4 +19,5 @@ internal static class StyleMemory
     public static PenStyle? Pen;
     public static StampStyle? Stamp;
     public static string? StampPath;
+    public static double? Eraser;
 }

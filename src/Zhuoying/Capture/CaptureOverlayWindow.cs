@@ -288,6 +288,17 @@ public sealed class CaptureOverlayWindow : Window
             _editorState.Tool = EditorTool.Stamp;
             e.Handled = true;
         }
+        else if (e.Key == Key.E)
+        {
+            _editorState.Tool = EditorTool.Eraser;
+            e.Handled = true;
+        }
+        else if (e.Key == Key.C)
+        {
+            // 无修饰键的 C：放大镜活动时复制中心像素颜色值
+            if (_editorLayer.TryCopyMagnifierColor())
+                e.Handled = true;
+        }
     }
 
     private void OnPointerPressedHandler(object? sender, PointerPressedEventArgs e)

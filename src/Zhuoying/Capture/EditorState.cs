@@ -17,6 +17,7 @@ public enum EditorTool
     Blur,
     Pen,
     Stamp,
+    Eraser,
 }
 
 /// <summary>编辑器会话级选项（由设置文件提供）。</summary>
@@ -78,6 +79,7 @@ public sealed class EditorState
         _penStyle = StyleMemory.Pen ?? _penStyle;
         _stampStyle = StyleMemory.Stamp ?? _stampStyle;
         _stampPath = StyleMemory.StampPath;
+        _eraserThickness = StyleMemory.Eraser ?? 24;
         _textStyle = _textStyle with
         {
             FontSize = Math.Clamp(_textStyle.FontSize, FontSizeMin, FontSizeMax),
@@ -96,8 +98,22 @@ public sealed class EditorState
         StyleMemory.Pen = _penStyle;
         StyleMemory.Stamp = _stampStyle;
         StyleMemory.StampPath = _stampPath;
+        StyleMemory.Eraser = _eraserThickness;
         StyleChanged?.Invoke();
     }
+
+    /// <summary>橡皮直径（物理像素，1–100；橡皮只有这一个设定）。</summary>
+    public double EraserThickness
+    {
+        get => _eraserThickness;
+        set
+        {
+            _eraserThickness = Math.Clamp(value, 1, 100);
+            RaiseStyleChanged();
+        }
+    }
+
+    private double _eraserThickness = 24;
 
     public IReadOnlyList<Color> PresetColors { get; }
 

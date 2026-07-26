@@ -124,6 +124,15 @@ public sealed class CaptureSession
         _annotations.Selected = el;
     }
 
+    /// <summary>测试钩子：添加一条橡皮擦除笔迹。</summary>
+    public void TestAddEraser(IReadOnlyList<PixelPoint> points, double thickness)
+    {
+        var el = new EraserElement { Thickness = thickness };
+        el.Points.AddRange(points);
+        _annotations.Elements.Add(el);
+        _annotations.Push(new AddElementCommand(_annotations, el));
+    }
+
     /// <summary>测试钩子：添加一个图章并选中。</summary>
     public void TestAddStamp(
         PixelRect bounds, string sourcePath, double rotationDeg, double outlineWidth, double opacity)
@@ -278,9 +287,21 @@ public sealed class CaptureSession
             ctx.DrawImage(_fullFrame,
                 new Rect(src.X, src.Y, src.Width, src.Height),
                 new Rect(0, 0, sel.Width, sel.Height));
+            Point ToOut(Point p) => new(p.X - sel.X, p.Y - sel.Y);
+            var eraserClip = EraserElement.BuildClip(_annotations.Elements, ToOut, 1.0);
             foreach (var el in _annotations.Elements)
             {
-                el.Render(ctx, p => new Point(p.X - sel.X, p.Y - sel.Y), 1.0);
+                if (el is EraserElement)
+                    continue;
+                if (el is PenElement && eraserClip != null)
+                {
+                    using (ctx.PushGeometryClip(eraserClip))
+                        el.Render(ctx, ToOut, 1.0);
+                }
+                else
+                {
+                    el.Render(ctx, ToOut, 1.0);
+                }
             }
         }
 

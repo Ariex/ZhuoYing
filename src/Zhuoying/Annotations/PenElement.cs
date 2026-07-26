@@ -107,7 +107,7 @@ public sealed class PenElement : AnnotationElement
         var dest = new Rect(
             toLocal(new Point(region.X, region.Y)),
             toLocal(new Point(region.Right, region.Bottom)));
-        using (context.PushGeometryClip(BuildBand(toLocal, t / 2)))
+        using (context.PushGeometryClip(StrokeGeometry.BuildBand(Points, toLocal, t / 2)))
         {
             context.DrawImage(_cache,
                 new Rect(0, 0, _cacheRegion.Width, _cacheRegion.Height), dest);
@@ -126,83 +126,6 @@ public sealed class PenElement : AnnotationElement
             ctx.LineTo(toLocal(ToPoint(Points[i])));
         ctx.EndFigure(false);
         return geometry;
-    }
-
-    /// <summary>
-    /// 笔迹带状填充几何（荧光裁剪用）：两侧等距偏移 + 折点 bevel + 两端半圆帽，
-    /// NonZero 填充规则保证自交（来回涂抹）不产生孔洞。
-    /// </summary>
-    private Geometry BuildBand(Func<Point, Point> toLocal, double half)
-    {
-        // 折算到目标坐标系并去除重合点
-        var pts = new List<Point>(Points.Count);
-        foreach (var p in Points)
-        {
-            var lp = toLocal(ToPoint(p));
-            if (pts.Count == 0 || Math.Abs(lp.X - pts[^1].X) > 0.01 || Math.Abs(lp.Y - pts[^1].Y) > 0.01)
-                pts.Add(lp);
-        }
-        if (pts.Count == 1)
-            return new EllipseGeometry(new Rect(
-                pts[0].X - half, pts[0].Y - half, half * 2, half * 2));
-
-        var left = new List<Point>();
-        var right = new List<Point>();
-        for (var i = 0; i < pts.Count; i++)
-        {
-            if (i > 0)
-            {
-                var n = Normal(pts[i - 1], pts[i]);
-                left.Add(pts[i] + n * half);
-                right.Add(pts[i] - n * half);
-            }
-            if (i < pts.Count - 1)
-            {
-                var n = Normal(pts[i], pts[i + 1]);
-                left.Add(pts[i] + n * half);
-                right.Add(pts[i] - n * half);
-            }
-        }
-
-        var geometry = new StreamGeometry();
-        using (var ctx = geometry.Open())
-        {
-            ctx.SetFillRule(FillRule.NonZero);
-            ctx.BeginFigure(right[0], true);
-            AppendCapArc(ctx, pts[0], right[0], left[0]);      // 起端半圆帽
-            foreach (var p in left)
-                ctx.LineTo(p);
-            AppendCapArc(ctx, pts[^1], left[^1], right[^1]);   // 末端半圆帽
-            for (var i = right.Count - 1; i >= 0; i--)
-                ctx.LineTo(right[i]);
-            ctx.EndFigure(true);
-        }
-        return geometry;
-    }
-
-    private static Vector Normal(Point a, Point b)
-    {
-        var dx = b.X - a.X;
-        var dy = b.Y - a.Y;
-        var len = Math.Sqrt(dx * dx + dy * dy);
-        return len < 1e-6 ? new Vector(0, 0) : new Vector(-dy / len, dx / len);
-    }
-
-    /// <summary>绕 center 从 from 到 to 补一段半圆（8 段折线近似）。</summary>
-    private static void AppendCapArc(StreamGeometryContext ctx, Point center, Point from, Point to)
-    {
-        var a0 = Math.Atan2(from.Y - center.Y, from.X - center.X);
-        var a1 = Math.Atan2(to.Y - center.Y, to.X - center.X);
-        // 半圆走向：取与 from→to 相反的一侧（外凸端帽），按逆时针差角展开
-        while (a1 > a0)
-            a1 -= Math.PI * 2;
-        var r = Math.Sqrt(Math.Pow(from.X - center.X, 2) + Math.Pow(from.Y - center.Y, 2));
-        const int steps = 8;
-        for (var i = 1; i <= steps; i++)
-        {
-            var a = a0 + (a1 - a0) * i / steps;
-            ctx.LineTo(new Point(center.X + r * Math.Cos(a), center.Y + r * Math.Sin(a)));
-        }
     }
 
     /// <summary>底图 × 画笔颜色（正片叠底）位图缓存。</summary>

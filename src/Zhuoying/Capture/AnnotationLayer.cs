@@ -27,10 +27,22 @@ public sealed class AnnotationLayer : Control
     public override void Render(DrawingContext context)
     {
         var s = Scaling;
+        Point ToLocal(Point p) => new((p.X - _origin.X) / s, (p.Y - _origin.Y) / s);
+        // 橡皮只作用于画笔：渲染画笔元素时套"全区 − 橡皮带"反向裁剪
+        var eraserClip = EraserElement.BuildClip(_model.Elements, ToLocal, s);
         foreach (var el in _model.Elements)
         {
-            el.Render(context,
-                p => new Point((p.X - _origin.X) / s, (p.Y - _origin.Y) / s), s);
+            if (el is EraserElement)
+                continue;
+            if (el is PenElement && eraserClip != null)
+            {
+                using (context.PushGeometryClip(eraserClip))
+                    el.Render(context, ToLocal, s);
+            }
+            else
+            {
+                el.Render(context, ToLocal, s);
+            }
         }
     }
 }

@@ -88,6 +88,9 @@ public sealed class EditorToolbar
     private readonly CheckBox _highlightCheck;
     private readonly StackPanel _penSwatchPanel;
     private readonly Button _stampToolButton;
+    private readonly Button _eraserToolButton;
+    private readonly StackPanel _eraserPropertyRow;
+    private readonly TextBlock _eraserSizeText;
     private readonly StackPanel _stampPropertyRow;
     private readonly Button _stampPickerButton;
     private readonly TextBlock _stampOpacityText;
@@ -142,6 +145,8 @@ public sealed class EditorToolbar
         _numberToolButton = ToolButton(NumberToolIcon(), "编号 (N)", () => _state.Tool = EditorTool.Number);
         _mosaicToolButton = ToolButton(MosaicGroupIcon(), "区域模糊：像素化 / 模糊化 (M / B)",
             () => _state.Tool = _state.LastMosaicTool);
+        _eraserToolButton = ToolButton(EraserIcon(), "橡皮 (E) — 只擦画笔笔迹",
+            () => _state.Tool = EditorTool.Eraser);
         _undoButton = ToolButton(GlyphIcon("↶"), "撤销 (Ctrl+Z)", () => _model.Undo());
         _redoButton = ToolButton(GlyphIcon("↷"), "重做 (Ctrl+Y)", () => _model.Redo());
         var copyButton = ToolButton(CopyIcon(), "复制 (Enter)", copy);
@@ -155,7 +160,8 @@ public sealed class EditorToolbar
             {
                 BuildGrip(), Separator(),
                 _selectButton, _penToolButton, _shapeButton, _stampToolButton, _lineToolButton,
-                _textToolButton, _numberToolButton, _mosaicToolButton, Separator(),
+                _textToolButton, _numberToolButton, _mosaicToolButton, _eraserToolButton,
+                Separator(),
                 _undoButton, _redoButton, Separator(),
                 copyButton, cancelButton,
             },
@@ -437,6 +443,32 @@ public sealed class EditorToolbar
             },
         };
 
+        // ---- 橡皮属性行（只有大小） ----
+
+        _eraserSizeText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 22 };
+        var eraserSizeButton = SliderPopupButton(
+            ThicknessIcon(), _eraserSizeText, "大小",
+            min: 1, max: 100,
+            get: () => _state.EraserThickness,
+            setLive: v => _state.EraserThickness = Math.Round(v));
+
+        _eraserPropertyRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Children =
+            {
+                eraserSizeButton,
+                new TextBlock
+                {
+                    Text = "只擦除画笔 / 荧光笔笔迹",
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            },
+        };
+
         // ---- 图章属性行 ----
 
         var stampPickerHost = StampPicker(out _stampPickerButton);
@@ -563,7 +595,7 @@ public sealed class EditorToolbar
             Children =
             {
                 toolRow, _propertyRow, _linePropertyRow, _textPropertyRow, _numberPropertyRow,
-                _mosaicPropertyRow, _penPropertyRow, _stampPropertyRow,
+                _mosaicPropertyRow, _penPropertyRow, _stampPropertyRow, _eraserPropertyRow,
             },
         };
         Root = new Border
@@ -597,6 +629,8 @@ public sealed class EditorToolbar
                 _state.Tool == EditorTool.Pen ? ActiveBackground : Colors.Transparent);
             _stampToolButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Stamp ? ActiveBackground : Colors.Transparent);
+            _eraserToolButton.Background = new SolidColorBrush(
+                _state.Tool == EditorTool.Eraser ? ActiveBackground : Colors.Transparent);
             _shapeButton.Background = new SolidColorBrush(
                 _state.Tool == EditorTool.Shape ? ActiveBackground : Colors.Transparent);
             _lineToolButton.Background = new SolidColorBrush(
@@ -623,6 +657,7 @@ public sealed class EditorToolbar
             var showPenProps = _state.Tool == EditorTool.Pen || _model.Selected is PenElement;
             var showStampProps = _state.Tool == EditorTool.Stamp
                                  || _model.Selected is StampElement;
+            var showEraserProps = _state.Tool == EditorTool.Eraser;
             // 属性行内只显示当前模式对应的滑条（像素大小 / 模糊半径）
             var showBlockSize = MosaicToolIndex() == 0;
             // 弧线只对折线有意义（箭头固定两点，样条无效果）
@@ -638,6 +673,7 @@ public sealed class EditorToolbar
                 || _mosaicPropertyRow.IsVisible != showMosaicProps
                 || _penPropertyRow.IsVisible != showPenProps
                 || _stampPropertyRow.IsVisible != showStampProps
+                || _eraserPropertyRow.IsVisible != showEraserProps
                 || _blockSizeHost.IsVisible != (showBlockSize && !_mosaicChoosing)
                 || _blurRadiusHost.IsVisible != (!showBlockSize && !_mosaicChoosing)
                 || _splineCheck.IsVisible != (showSpline && !_lineChoosing)
@@ -651,6 +687,7 @@ public sealed class EditorToolbar
                 _mosaicPropertyRow.IsVisible = showMosaicProps;
                 _penPropertyRow.IsVisible = showPenProps;
                 _stampPropertyRow.IsVisible = showStampProps;
+                _eraserPropertyRow.IsVisible = showEraserProps;
                 // 就地选择态：整行只显示两个工具选择按钮，其余全部隐藏
                 foreach (var child in _linePropertyRow.Children)
                     child.IsVisible = _lineChoosing
@@ -714,6 +751,8 @@ public sealed class EditorToolbar
             _blurRadiusText.Text = ((int)mosaicStyle.BlurRadius).ToString();
             _blockSlider.Value = mosaicStyle.BlockSize;   // 代码赋值不回触发 ValueChanged
             _blurSlider.Value = mosaicStyle.BlurRadius;
+            _eraserSizeText.Text = ((int)_state.EraserThickness).ToString();
+
             var stampStyle = _state.CurrentStampStyle;
             _stampOpacityText.Text = ((int)stampStyle.Opacity).ToString();
             _stampPickerButton.Content = WithChevron(_state.CurrentStampPath is { } stampPath
@@ -1660,6 +1699,39 @@ public sealed class EditorToolbar
                     Text = "沿素材不透明轮廓描边（含镂空内缘）",
                     FontSize = 10,
                     Foreground = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)),
+                },
+            },
+        };
+    }
+
+    /// <summary>橡皮图标：斜放的橡皮块（双色分段）+ 底部擦痕。</summary>
+    private static Control EraserIcon()
+    {
+        var stroke = new SolidColorBrush(IconColor);
+        return new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Path
+                {
+                    // 斜置圆角矩形（橡皮块轮廓）
+                    Data = Geometry.Parse("M 8.2,15.8 L 3.6,11.2 Q 2.4,10 3.6,8.8 L 9.4,3 Q 10.6,1.8 11.8,3 L 16.4,7.6 Q 17.6,8.8 16.4,10 L 10.6,15.8 Q 9.4,17 8.2,15.8 Z"),
+                    Stroke = stroke,
+                    StrokeThickness = 1.8,
+                },
+                new Avalonia.Controls.Shapes.Line
+                {
+                    // 双色分段线
+                    StartPoint = new Point(6.4, 6), EndPoint = new Point(14, 13.4),
+                    Stroke = stroke, StrokeThickness = 1.4,
+                },
+                new Avalonia.Controls.Shapes.Line
+                {
+                    StartPoint = new Point(5, 19), EndPoint = new Point(18.5, 19),
+                    Stroke = stroke, StrokeThickness = 2,
+                    StrokeLineCap = PenLineCap.Round,
                 },
             },
         };

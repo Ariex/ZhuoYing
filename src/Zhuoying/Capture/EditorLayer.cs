@@ -26,6 +26,7 @@ public sealed class EditorLayer : Control
         CreateNumber,
         CreatePen,
         CreateStamp,
+        CreateEraser,
         MoveElement,
         ResizeElement,
         RadiusElement,
@@ -79,8 +80,11 @@ public sealed class EditorLayer : Control
     private int _handleIndex;
     private bool _dragMutated;
     private string _currentCursorTag = "";
+    private PixelPoint? _pointerPhys; // 最近指针位置（放大镜跟随）
+    private string? _magnifierHex;    // 放大镜当前中心像素颜色（C 键复制）
     private static Cursor? s_rotateCursor;
     private static double s_rotateCursorScale;
+    private static readonly Dictionary<string, Cursor> s_brushCursors = new();
 
     /// <summary>
     /// 旋转手柄光标：环形箭头（Windows 无内置旋转光标，运行时渲染 ↻ 生成）。
@@ -122,6 +126,8 @@ public sealed class EditorLayer : Control
         _model = state.Model;
         _selection = selection;
         _origin = origin;
+        // 本层唯一的位图绘制是放大镜（像素级放大），必须最近邻插值
+        RenderOptions.SetBitmapInterpolationMode(this, Avalonia.Media.Imaging.BitmapInterpolationMode.None);
         _model.Changed += InvalidateVisual;
         _state.ToolChanged += () =>
         {
@@ -215,7 +221,7 @@ public sealed class EditorLayer : Control
     public bool CancelInProgress()
     {
         if (_op is not (Op.CreateShape or Op.CreateArrow or Op.CreatePolyline or Op.CreateNumber
-                or Op.CreatePen or Op.CreateStamp)
+                or Op.CreatePen or Op.CreateStamp or Op.CreateEraser)
             || _liveElement == null)
             return false;
         if (_liveElement is NumberElement number) // 序列回退，下次放置沿用本编号
@@ -366,6 +372,18 @@ public sealed class EditorLayer : Control
                 _liveElement = el;
                 _op = Op.CreateStamp;
                 _dragStart = phys;
+                _model.RaiseChanged();
+                e.Pointer.Capture(this);
+                break;
+            }
+            case EditorTool.Eraser:
+            {
+                // 拖拽采点擦除（实时生效：元素已入列表，画笔渲染立即被裁剪）
+                var el = new EraserElement { Thickness = _state.EraserThickness };
+                el.Points.Add(phys);
+                _model.Elements.Add(el);
+                _liveElement = el;
+                _op = Op.CreateEraser;
                 _model.RaiseChanged();
                 e.Pointer.Capture(this);
                 break;
@@ -536,6 +554,9 @@ public sealed class EditorLayer : Control
     {
         base.OnPointerMoved(e);
         var phys = ToPhysical(e);
+        _pointerPhys = phys;
+        if (MagnifierActive)
+            InvalidateVisual(); // 放大镜跟随光标
         switch (_op)
         {
             case Op.None:
@@ -572,6 +593,17 @@ public sealed class EditorLayer : Control
                 if (dx * dx + dy * dy >= 4)
                 {
                     cp.Points.Add(phys);
+                    _model.RaiseChanged();
+                }
+                break;
+            }
+            case Op.CreateEraser when _liveElement is EraserElement ce:
+            {
+                var last = ce.Points[^1];
+                double dx = phys.X - last.X, dy = phys.Y - last.Y;
+                if (dx * dx + dy * dy >= 4)
+                {
+                    ce.Points.Add(phys);
                     _model.RaiseChanged();
                 }
                 break;
@@ -724,6 +756,10 @@ public sealed class EditorLayer : Control
             case Op.CreateStamp when _liveElement is StampElement cst:
                 _model.Push(new AddElementCommand(_model, cst));
                 // 图章工具保持激活：选一次素材可连续点击盖多个
+                break;
+            case Op.CreateEraser when _liveElement is EraserElement ce:
+                _model.Push(new AddElementCommand(_model, ce));
+                // 橡皮保持激活连续擦
                 break;
             case Op.MoveElement:
             case Op.ResizeElement:
@@ -910,9 +946,24 @@ public sealed class EditorLayer : Control
             return;
         }
 
+        // 画笔/橡皮：圆形光标实时反映大小/颜色/荧光（橡皮 = 半透明灰）
+        if (_state.Tool == EditorTool.Pen)
+        {
+            var st = _state.CurrentPenStyle;
+            SetBrushCursor($"pen|{(int)st.Thickness}|{st.Color}|{st.Highlight}",
+                st.Thickness, st.Color, st.Highlight);
+            return;
+        }
+        if (_state.Tool == EditorTool.Eraser)
+        {
+            SetBrushCursor($"eraser|{(int)_state.EraserThickness}",
+                _state.EraserThickness, null, false);
+            return;
+        }
+
         StandardCursorType type;
         if (_state.Tool is EditorTool.Shape or EditorTool.Arrow or EditorTool.Polyline
-            or EditorTool.Number or EditorTool.Pixelate or EditorTool.Blur or EditorTool.Pen
+            or EditorTool.Number or EditorTool.Pixelate or EditorTool.Blur
             or EditorTool.Stamp)
         {
             type = StandardCursorType.Cross;
@@ -956,6 +1007,83 @@ public sealed class EditorLayer : Control
         Cursor = type is { } t ? new Cursor(t) : RotateCursor(Scaling);
     }
 
+    private void SetBrushCursor(string tag, double diameterPhys, Color? color, bool highlight)
+    {
+        var s = Scaling;
+        var fullTag = $"{tag}|{s:0.##}";
+        if (fullTag == _currentCursorTag)
+            return;
+        _currentCursorTag = fullTag;
+        Cursor = BrushCursor(diameterPhys, color, highlight, s);
+    }
+
+    /// <summary>
+    /// 圆形笔刷光标：直径 = 工具粗细（物理像素），画笔填工具色（荧光 = 半透明）、
+    /// 橡皮填半透明灰；外圈同区域模糊边界样式（1px 暗灰 + 白色渐弱发光），
+    /// 深浅背景都可见。按参数缓存。
+    /// </summary>
+    private static Cursor BrushCursor(double diameterPhys, Color? color, bool highlight, double s)
+    {
+        var d = Math.Clamp(diameterPhys, 6, 220);
+        var key = $"{(int)d}|{color?.ToUInt32() ?? 0}|{highlight}|{s:0.##}";
+        if (s_brushCursors.TryGetValue(key, out var cached))
+            return cached;
+        if (s_brushCursors.Count > 64)
+            s_brushCursors.Clear();
+
+        var glow = (int)Math.Ceiling(5 * s);
+        var size = (int)Math.Ceiling(d) + glow * 2;
+        var rtb = new Avalonia.Media.Imaging.RenderTargetBitmap(
+            new PixelSize(size, size), new Vector(96, 96));
+        using (var ctx = rtb.CreateDrawingContext())
+        {
+            var center = new Point(size / 2.0, size / 2.0);
+            var r = d / 2.0;
+            var fill = color is { } col
+                ? new SolidColorBrush(Color.FromArgb(
+                    highlight ? (byte)0x78 : (byte)0xFF, col.R, col.G, col.B))
+                : new SolidColorBrush(Color.FromArgb(0x58, 0x80, 0x80, 0x80));
+            ctx.DrawEllipse(fill, null, center, r, r);
+            for (var i = 3; i >= 1; i--)
+            {
+                byte alpha = i switch { 3 => 0x14, 2 => 0x2A, _ => 0x46 };
+                ctx.DrawEllipse(null,
+                    new Pen(new SolidColorBrush(Color.FromArgb(alpha, 0xFF, 0xFF, 0xFF)), 1.6 * s),
+                    center, r + i * 1.3 * s, r + i * 1.3 * s);
+            }
+            ctx.DrawEllipse(null,
+                new Pen(new SolidColorBrush(Color.FromArgb(0xC8, 0x3C, 0x3C, 0x3C)),
+                    Math.Max(1, 0.75 * s)),
+                center, r, r);
+        }
+        var cursor = new Cursor(rtb, new PixelPoint(size / 2, size / 2));
+        s_brushCursors[key] = cursor;
+        return cursor;
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        _pointerPhys = null;
+        InvalidateVisual();
+    }
+
+    /// <summary>放大镜显示条件：选择工具、无选中元素（纯选区语境，帮助像素级框选）。</summary>
+    private bool MagnifierActive =>
+        _state.Tool == EditorTool.Select
+        && _model.Selected == null
+        && _pointerPhys != null
+        && _state.BackgroundFrame != null;
+
+    /// <summary>C 键：复制放大镜中心像素颜色值（#RRGGBB）。放大镜不活动时返回 false。</summary>
+    public bool TryCopyMagnifierColor()
+    {
+        if (!MagnifierActive || _magnifierHex == null)
+            return false;
+        (TopLevel.GetTopLevel(this))?.Clipboard?.SetTextAsync(_magnifierHex);
+        return true;
+    }
+
     public override void Render(DrawingContext context)
     {
         // 透明底保证整层可命中
@@ -968,6 +1096,9 @@ public sealed class EditorLayer : Control
             if (element is MosaicElement mosaic)
                 RenderMosaicBoundary(context, mosaic);
         }
+
+        if (MagnifierActive)
+            RenderMagnifier(context, _pointerPhys!.Value);
 
         if (_op is Op.CreateShape or Op.CreateArrow or Op.CreatePolyline)
             return;
@@ -996,6 +1127,100 @@ public sealed class EditorLayer : Control
                 break;
             }
         }
+    }
+
+    private const int MagCols = 21;   // 放大镜采样宽（源像素）
+    private const int MagRows = 13;   // 放大镜采样高
+    private const double MagZoom = 10; // 每源像素的显示尺寸（DIP）
+
+    /// <summary>
+    /// 跟随光标的放大镜（PixPin 式）：像素网格放大 + 中心像素高亮 +
+    /// 坐标/颜色信息条。默认在光标右下方，空间不足自动翻到左/上侧。
+    /// </summary>
+    private void RenderMagnifier(DrawingContext context, PixelPoint phys)
+    {
+        var frame = _state.BackgroundFrame!;
+        var fw = frame.PixelSize.Width;
+        var fh = frame.PixelSize.Height;
+        var fx = phys.X - _state.BackgroundOrigin.X;
+        var fy = phys.Y - _state.BackgroundOrigin.Y;
+        if (fx < 0 || fy < 0 || fx >= fw || fy >= fh)
+            return;
+
+        // 读中心像素颜色
+        Color pixel;
+        using (var fb = frame.Lock())
+        {
+            unsafe
+            {
+                var p = (byte*)fb.Address + (long)fy * fb.RowBytes + (long)fx * 4;
+                pixel = Color.FromRgb(p[2], p[1], p[0]);
+            }
+        }
+        _magnifierHex = $"#{pixel.R:X2}{pixel.G:X2}{pixel.B:X2}";
+
+        var startX = Math.Clamp(fx - MagCols / 2, 0, Math.Max(0, fw - MagCols));
+        var startY = Math.Clamp(fy - MagRows / 2, 0, Math.Max(0, fh - MagRows));
+        const double viewW = MagCols * MagZoom;
+        const double viewH = MagRows * MagZoom;
+        const double infoH = 40;
+        const double gap = 22;
+        var panelW = viewW + 2;
+        var panelH = viewH + infoH + 2;
+
+        var local = ToLocal(phys);
+        var x = local.X + gap;
+        if (x + panelW > Bounds.Width)
+            x = local.X - gap - panelW;
+        var y = local.Y + gap;
+        if (y + panelH > Bounds.Height)
+            y = local.Y - gap - panelH;
+        x = Math.Clamp(x, 0, Math.Max(0, Bounds.Width - panelW));
+        y = Math.Clamp(y, 0, Math.Max(0, Bounds.Height - panelH));
+
+        // 面板底 + 边框
+        context.DrawRectangle(
+            new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1E, 0x1E)),
+            new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0xFF, 0xFF, 0xFF)), 1),
+            new Rect(x - 0.5, y - 0.5, panelW + 1, panelH + 1));
+
+        // 像素放大区（本层已设最近邻插值）
+        var view = new Rect(x + 1, y + 1, viewW, viewH);
+        context.DrawImage(frame,
+            new Rect(startX, startY, MagCols, MagRows), view);
+
+        // 网格线
+        var gridPen = new Pen(new SolidColorBrush(Color.FromArgb(0x2E, 0x00, 0x00, 0x00)), 1);
+        for (var i = 1; i < MagCols; i++)
+            context.DrawLine(gridPen,
+                new Point(view.X + i * MagZoom, view.Y), new Point(view.X + i * MagZoom, view.Bottom));
+        for (var i = 1; i < MagRows; i++)
+            context.DrawLine(gridPen,
+                new Point(view.X, view.Y + i * MagZoom), new Point(view.Right, view.Y + i * MagZoom));
+
+        // 中心像素高亮框（黑白双圈，深浅像素上都可见）
+        var ci = fx - startX;
+        var cj = fy - startY;
+        var cell = new Rect(view.X + ci * MagZoom, view.Y + cj * MagZoom, MagZoom, MagZoom);
+        context.DrawRectangle(null, new Pen(Brushes.White, 1), cell.Inflate(0.5));
+        context.DrawRectangle(null, new Pen(Brushes.Black, 1), cell.Inflate(-0.5));
+
+        // 信息条：坐标 + 色块 + 颜色值 + C 键提示
+        var line1 = new FormattedText(
+            $"({phys.X}, {phys.Y})", System.Globalization.CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight, Typeface.Default, 11, Brushes.White);
+        context.DrawText(line1, new Point(
+            view.X + (viewW - line1.Width) / 2, view.Bottom + 3));
+
+        var swatchY = view.Bottom + 21;
+        context.DrawRectangle(new SolidColorBrush(pixel),
+            new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0xFF, 0xFF, 0xFF)), 1),
+            new Rect(view.X + 8, swatchY + 1, 11, 11));
+        var line2 = new FormattedText(
+            $"{_magnifierHex}   C: 复制颜色", System.Globalization.CultureInfo.CurrentCulture,
+            FlowDirection.LeftToRight, Typeface.Default, 11,
+            new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD)));
+        context.DrawText(line2, new Point(view.X + 25, swatchY));
     }
 
     /// <summary>模糊区域边界：1 物理像素暗灰描边 + 向外渐弱的白色发光（深浅底图都可辨）。</summary>
