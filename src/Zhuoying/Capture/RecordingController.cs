@@ -14,11 +14,18 @@ namespace Zhuoying.Capture;
 /// 两个窗口都设 WDA_EXCLUDEFROMCAPTURE——BitBlt 帧源不入镜；红框还画在
 /// 区域外扩 2px 处双保险。活屏录制（非冻结帧模式），录制期间用户正常操作。
 /// </summary>
+public enum RecordFormat
+{
+    Gif,
+    Mp4,
+}
+
 public sealed class RecordingController
 {
     private static RecordingController? _active;
 
-    private readonly GifRecorder _recorder;
+    private readonly IScreenRecorder _recorder;
+    private readonly string _ext;
     private readonly string _tempPath;
     private readonly string _saveDir;
     private readonly Window _border;
@@ -28,11 +35,12 @@ public sealed class RecordingController
     private bool _finished;
 
     /// <summary>开始录制（同一时刻只允许一场；重复调用忽略）。</summary>
-    public static void Start(PixelRect region, int fps, string saveDir)
+    public static void Start(PixelRect region, int fps, string saveDir,
+        RecordFormat format = RecordFormat.Gif)
     {
         if (_active != null)
             return;
-        _active = new RecordingController(region, fps, saveDir);
+        _active = new RecordingController(region, fps, saveDir, format);
     }
 
     /// <summary>是否正在录制（避免录制中再开截屏会话时误操作，目前仅诊断用）。</summary>
@@ -41,12 +49,18 @@ public sealed class RecordingController
     /// <summary>结束当前录制（等效点击控制条「完成」；自测钩子用）。</summary>
     internal static void FinishActive() => _active?.Finish();
 
-    private RecordingController(PixelRect region, int fps, string saveDir)
+    private RecordingController(PixelRect region, int fps, string saveDir, RecordFormat format)
     {
         _saveDir = saveDir;
+        _ext = format == RecordFormat.Mp4 ? "mp4" : "gif";
         _tempPath = Path.Combine(Path.GetTempPath(),
-            $"zhuoying-rec-{DateTime.Now:yyyyMMdd-HHmmss}.gif");
-        _recorder = new GifRecorder(region, fps, _tempPath);
+            $"zhuoying-rec-{DateTime.Now:yyyyMMdd-HHmmss}.{_ext}");
+        // MP4 的偶数边长收缩同步应用到红框，框住的即录到的
+        if (format == RecordFormat.Mp4)
+            region = Mp4Recorder.EvenRegion(region);
+        _recorder = format == RecordFormat.Mp4
+            ? new Mp4Recorder(region, fps, _tempPath)
+            : new GifRecorder(region, fps, _tempPath);
 
         // 区域红框：外扩 2px、全窗点击穿透
         _border = new Window
@@ -186,7 +200,7 @@ public sealed class RecordingController
         {
             _recorder.Stop();
             Directory.CreateDirectory(_saveDir);
-            var path = UniquePath(_saveDir, $"捉影_{DateTime.Now:yyyyMMdd_HHmmss}.gif");
+            var path = UniquePath(_saveDir, $"捉影_{DateTime.Now:yyyyMMdd_HHmmss}.{_ext}");
             File.Move(_tempPath, path);
             NotificationToast.Show($"录制完成：{path}");
         }

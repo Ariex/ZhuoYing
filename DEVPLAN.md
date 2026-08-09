@@ -223,9 +223,26 @@
   尺寸/帧数正确、总时长恰 3000ms、色序与动画一致）；`--test-record-ui`
   全流程落盘；--test-copy 回归；AOT 回归
 
+## 阶段十六：MP4 录屏 ✅（2026-08-09 完成，里程碑 0.17）
+
+- [x] MediaFoundation.cs：手写 MF 互操作（同 DDA 风格 vtable 函数指针，AOT
+  兼容零依赖）——SinkWriter（AddStream/SetInputMediaType/WriteSample/Finalize）、
+  媒体类型构造、样本打包、SourceReader 解码回读（自测用）
+- [x] Mp4Recorder：单线程采样即写（SinkWriter 内部异步；无需 GIF 的相同帧
+  合并——编码器对静止画面近零码率）；输入 RGB32 **正 stride 声明顶朝下**
+  （RGB 默认底朝上，不声明整帧垂直翻转）；码率 0.1bpp×像素率钳 1–25Mbps；
+  偶数边长向下取偶；>4096×2304 明确报错；Windows N 无媒体包 MFStartup 失败有提示
+- [x] 帧源复用：RegionFrameSource 抽出（BitBlt+光标补绘，GIF/MP4 共用）；
+  IScreenRecorder 接口统一 RecordingController
+- [x] 入口：F5 / 工具条 🎬（与 GIF ⏺ 并列）；RecordFormat 参数贯穿
+- [x] 验证：`--test-mp4` 3s/24fps → 79 帧写入 108KB，SourceReader 解码
+  800×600×73 帧、动画点色序红绿蓝黄正确、无翻转（坑：解码到 RGB32 需
+  MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING；同步 ReadSample 不能在 STA
+  UI 线程——MF 工作队列死锁，放后台 MTA 线程）；`--test-record-ui …,mp4`
+  完整落盘；AOT 回归
+
 ## 后续阶段（概要）
 
 - REQUIREMENTS v1 主体功能已全部落地（仅聚光灯暂缓），收尾后可升 1.0
 - 录屏增强：帧源升级 DDA 持久会话或 WGC（独占全屏/高负载场景）；
-  MP4 输出（Media Foundation H.264，AOT 需手写 COM 互操作）；
-  帧率/含光标做成设置项
+  帧率/含光标做成设置项；录音（麦克风/系统回环）并入 MP4

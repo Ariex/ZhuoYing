@@ -74,6 +74,7 @@ public partial class App : Application
             SetupTestDdaHook(args);
             SetupTestRecordHook(args);
             SetupTestRecordUiHook(args);
+            SetupTestMp4Hook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -464,8 +465,159 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 解析 `--test-record-ui "x,y,w,h[,毫秒]"`：走完整 RecordingController 流程
-    ///（红框 + 控制条 + 排除入镜 + 完成落盘到默认目录），到时自动"完成"后退出。
+    /// 解析 `--test-mp4 "x,y,w,h[,fps[,毫秒]]"`：Mp4Recorder 录指定时长（区域
+    /// 左上象限放变色动画小窗——若编码垂直翻转，该点在解码帧中会错位，色序
+    /// 检查即失败），随后用 SourceReader 解码回读动画点色序写入 result 文件。
+    /// </summary>
+    private void SetupTestMp4Hook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-mp4");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var p = args[index + 1].Split(',');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+        var fps = p.Length > 4 ? int.Parse(p[4]) : 24;
+        var durationMs = p.Length > 5 ? int.Parse(p[5]) : 3000;
+        DispatcherTimer.RunOnce(() =>
+        {
+            var wnd = new Window
+            {
+                SystemDecorations = SystemDecorations.None,
+                ShowInTaskbar = false,
+                Topmost = true,
+                ShowActivated = false,
+                Width = 60,
+                Height = 40,
+                Background = Avalonia.Media.Brushes.Red,
+                Position = new Avalonia.PixelPoint(
+                    rect.X + rect.Width / 4, rect.Y + rect.Height / 4),
+            };
+            wnd.Show();
+            var tick = 0;
+            var colors = new[]
+            {
+                Avalonia.Media.Brushes.Red, Avalonia.Media.Brushes.Lime,
+                Avalonia.Media.Brushes.Blue, Avalonia.Media.Brushes.Yellow,
+            };
+            var animTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+            animTimer.Tick += (_, _) => wnd.Background = colors[++tick % colors.Length];
+            animTimer.Start();
+
+            var mp4Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "zhuoying-record-test.mp4");
+            var recorder = new Mp4Recorder(rect, fps, mp4Path);
+            DispatcherTimer.RunOnce(() =>
+            {
+                recorder.Stop();
+                animTimer.Stop();
+                wnd.Close();
+                // 采样点 = 动画窗中心（区域相对物理像素；窗宽 60/高 40 DIP×2 缩放）
+                var sampleX = rect.Width / 4 + 60;
+                var sampleY = rect.Height / 4 + 40;
+                // 同步 SourceReader 不能跑在 STA 的 UI 线程（MF 工作队列死锁），
+                // 放到后台 MTA 线程解码
+                new System.Threading.Thread(() =>
+                {
+                    string report;
+                    try
+                    {
+                        report = ProbeMp4(mp4Path, sampleX, sampleY);
+                    }
+                    catch (Exception ex)
+                    {
+                        report = $"probe异常: {ex.Message}";
+                    }
+                    System.IO.File.WriteAllText(
+                        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zhuoying-mp4-test.txt"),
+                        $"path={mp4Path}\nframesWritten={recorder.FrameCount}\n" +
+                        $"bytes={new System.IO.FileInfo(mp4Path).Length}\n{report}\n");
+                    Dispatcher.UIThread.Post(() =>
+                        (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown());
+                }) { IsBackground = true }.Start();
+            }, TimeSpan.FromMilliseconds(durationMs));
+        }, TimeSpan.FromMilliseconds(800));
+    }
+
+    /// <summary>解码 MP4 前若干帧，报告尺寸/帧数与指定像素的颜色序列。</summary>
+    private static string ProbeMp4(string path, int x, int y)
+    {
+        MediaFoundation.Startup();
+        var reader = IntPtr.Zero;
+        var request = IntPtr.Zero;
+        var current = IntPtr.Zero;
+        try
+        {
+            // 解码到 RGB32 需显式开视频处理（否则 SetCurrentMediaType 报
+            // MF_E_INVALIDMEDIATYPE 0xC00D36B4）
+            MediaFoundation.Check(
+                MediaFoundation.MFCreateAttributes(out var attrs, 1), "MFCreateAttributes");
+            MediaFoundation.SetU32(attrs,
+                MediaFoundation.MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1);
+            var hrReader = MediaFoundation.MFCreateSourceReaderFromURL(path, attrs, out reader);
+            MediaFoundation.Release(ref attrs);
+            MediaFoundation.Check(hrReader, "MFCreateSourceReaderFromURL");
+            MediaFoundation.Check(MediaFoundation.MFCreateMediaType(out request), "MFCreateMediaType");
+            MediaFoundation.SetGuid(request,
+                MediaFoundation.MF_MT_MAJOR_TYPE, MediaFoundation.MFMediaType_Video);
+            MediaFoundation.SetGuid(request,
+                MediaFoundation.MF_MT_SUBTYPE, MediaFoundation.MFVideoFormat_RGB32);
+            MediaFoundation.ReaderSetMediaType(reader,
+                MediaFoundation.MF_SOURCE_READER_FIRST_VIDEO_STREAM, request);
+
+            current = MediaFoundation.ReaderGetMediaType(reader,
+                MediaFoundation.MF_SOURCE_READER_FIRST_VIDEO_STREAM);
+            MediaFoundation.TryGetU64(current, MediaFoundation.MF_MT_FRAME_SIZE, out var size);
+            var w = (int)(size >> 32);
+            var h = (int)(size & 0xFFFFFFFF);
+            var strideTopDown = w * 4;
+            if (MediaFoundation.TryGetU32(current, MediaFoundation.MF_MT_DEFAULT_STRIDE, out var st)
+                && (int)st < 0)
+                strideTopDown = -(int)st; // 负 stride = 底朝上，取行时翻转
+
+            var frames = 0;
+            var colorSeq = new System.Text.StringBuilder();
+            string? previous = null;
+            while (frames < 200)
+            {
+                MediaFoundation.Check(MediaFoundation.ReadSample(reader,
+                    MediaFoundation.MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+                    out var flags, out var sample), "ReadSample");
+                if ((flags & MediaFoundation.MF_SOURCE_READERF_ENDOFSTREAM) != 0)
+                    break;
+                if (sample == IntPtr.Zero)
+                    continue;
+                var bytes = MediaFoundation.SampleToBytes(sample);
+                MediaFoundation.Release(ref sample);
+                frames++;
+                var row = MediaFoundation.TryGetU32(current,
+                        MediaFoundation.MF_MT_DEFAULT_STRIDE, out var s2) && (int)s2 < 0
+                    ? h - 1 - y
+                    : y;
+                var offset = row * strideTopDown + x * 4;
+                if (offset + 4 > bytes.Length)
+                    continue;
+                var hex = $"#{bytes[offset + 2]:X2}{bytes[offset + 1]:X2}{bytes[offset]:X2}";
+                if (hex != previous)
+                {
+                    colorSeq.Append(hex).Append(' ');
+                    previous = hex;
+                }
+            }
+            return $"decoded={w}x{h} frames={frames}\n动画点变色序列: {colorSeq}";
+        }
+        finally
+        {
+            MediaFoundation.Release(ref current);
+            MediaFoundation.Release(ref request);
+            MediaFoundation.Release(ref reader);
+            MediaFoundation.Shutdown();
+        }
+    }
+
+    /// <summary>
+    /// 解析 `--test-record-ui "x,y,w,h[,毫秒[,mp4]]"`：走完整 RecordingController
+    /// 流程（红框 + 控制条 + 排除入镜 + 完成落盘到默认目录），到时自动"完成"后退出。
     /// </summary>
     private void SetupTestRecordUiHook(string[] args)
     {
@@ -476,9 +628,12 @@ public partial class App : Application
         var rect = new Avalonia.PixelRect(
             int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
         var durationMs = p.Length > 4 ? int.Parse(p[4]) : 2500;
+        var format = p.Length > 5 && p[5] == "mp4"
+            ? Zhuoying.Capture.RecordFormat.Mp4 : Zhuoying.Capture.RecordFormat.Gif;
         DispatcherTimer.RunOnce(() =>
         {
-            Zhuoying.Capture.RecordingController.Start(rect, 24, _appSettings.ResolveSavePath());
+            Zhuoying.Capture.RecordingController.Start(
+                rect, 24, _appSettings.ResolveSavePath(), format);
             DispatcherTimer.RunOnce(() =>
             {
                 Zhuoying.Capture.RecordingController.FinishActive();

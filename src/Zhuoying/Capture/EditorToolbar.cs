@@ -130,7 +130,7 @@ public sealed class EditorToolbar
 
     public EditorToolbar(
         EditorState state, Action copy, Action save, Action saveAs, Action pin,
-        Action record, Action cancel)
+        Action<RecordFormat> record, Action cancel)
     {
         _state = state;
         _model = state.Model;
@@ -155,7 +155,10 @@ public sealed class EditorToolbar
         var saveButton = ToolButton(SaveIcon(), "保存到默认目录 (Ctrl+S)", save);
         var saveAsButton = ToolButton(SaveAsIcon(), "另存为… (Ctrl+Shift+S)", saveAs);
         var pinButton = ToolButton(PinIcon(), "贴图到屏幕 (F3)", pin);
-        var recordButton = ToolButton(RecordIcon(), "录制 GIF (F4) — 选区活屏录制", record);
+        var recordButton = ToolButton(RecordIcon(), "录制 GIF (F4) — 选区活屏录制",
+            () => record(RecordFormat.Gif));
+        var recordMp4Button = ToolButton(RecordMp4Icon(), "录制 MP4 (F5) — 选区活屏录制",
+            () => record(RecordFormat.Mp4));
         var cancelButton = ToolButton(GlyphIcon("✕"), "取消 (Esc)", cancel);
 
         var toolRow = new StackPanel
@@ -169,7 +172,8 @@ public sealed class EditorToolbar
                 _textToolButton, _numberToolButton, _mosaicToolButton, _eraserToolButton,
                 Separator(),
                 _undoButton, _redoButton, Separator(),
-                copyButton, saveButton, saveAsButton, pinButton, recordButton, cancelButton,
+                copyButton, saveButton, saveAsButton, pinButton, recordButton, recordMp4Button,
+                cancelButton,
             },
         };
 
@@ -1793,6 +1797,39 @@ public sealed class EditorToolbar
                     Fill = new SolidColorBrush(Color.FromRgb(0xE5, 0x3E, 0x3E)),
                     [Canvas.LeftProperty] = 7.0,
                     [Canvas.TopProperty] = 7.0,
+                },
+            },
+        };
+    }
+
+    /// <summary>MP4 录制图标：摄像机（机身 + 镜头梯形）。</summary>
+    private static Control RecordMp4Icon()
+    {
+        var stroke = new SolidColorBrush(IconColor);
+        return new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Rectangle
+                {
+                    Width = 12,
+                    Height = 10,
+                    RadiusX = 2,
+                    RadiusY = 2,
+                    Stroke = stroke,
+                    StrokeThickness = 1.8,
+                    [Canvas.LeftProperty] = 2.0,
+                    [Canvas.TopProperty] = 6.0,
+                },
+                new Avalonia.Controls.Shapes.Path
+                {
+                    // 镜头梯形指向右侧
+                    Data = Geometry.Parse("M 15,9 L 20,6.5 L 20,15.5 L 15,13 Z"),
+                    Stroke = stroke,
+                    StrokeThickness = 1.6,
+                    StrokeJoin = PenLineJoin.Round,
                 },
             },
         };

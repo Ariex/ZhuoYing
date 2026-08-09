@@ -267,9 +267,9 @@ public sealed class CaptureSession
         _annotations.Selected = el;
     }
 
-    /// <summary>录制 GIF（F4）：关闭冻结帧会话，对选区开始活屏录制（24fps 采样，
-    /// 相同帧合并时长；不含标注——录屏是活画面，冻结帧标注无意义）。</summary>
-    private void Record()
+    /// <summary>录制（F4 GIF / F5 MP4）：关闭冻结帧会话，对选区开始活屏录制
+    ///（24fps 采样；不含标注——录屏是活画面，冻结帧标注无意义）。</summary>
+    private void Record(RecordFormat format)
     {
         var sel = _selection.Selection;
         if (sel.Width <= 0 || sel.Height <= 0)
@@ -278,7 +278,7 @@ public sealed class CaptureSession
         CloseAll();
         try
         {
-            RecordingController.Start(sel, 24, saveDir);
+            RecordingController.Start(sel, 24, saveDir, format);
         }
         catch (Exception ex)
         {

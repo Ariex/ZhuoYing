@@ -20,7 +20,7 @@ namespace Zhuoying.Capture;
 /// 时间轴：相同帧不重复写——挂起当前帧直到内容变化，把真实流逝时间
 ///（1/100 秒取整、误差滚动进位）写为该帧 delay，回放速度忠于实际。
 /// </summary>
-internal sealed unsafe class GifRecorder : IDisposable
+internal sealed unsafe class GifRecorder : IScreenRecorder
 {
     private readonly PixelRect _region;
     private readonly int _fps;
@@ -91,82 +91,34 @@ internal sealed unsafe class GifRecorder : IDisposable
     private void CaptureLoop()
     {
         int w = _region.Width, h = _region.Height;
-        var screenDc = Win32.GetDC(IntPtr.Zero);
-        var memDc = Win32.CreateCompatibleDC(screenDc);
-        var bmi = new Win32.BITMAPINFOHEADER
+        using var source = new RegionFrameSource(_region);
+        var intervalMs = 1000.0 / _fps;
+        var tick = 0L;
+        while (!_stopping)
         {
-            biSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Win32.BITMAPINFOHEADER>(),
-            biWidth = w,
-            biHeight = -h,
-            biPlanes = 1,
-            biBitCount = 32,
-            biCompression = Win32.BI_RGB,
-        };
-        var hBitmap = Win32.CreateDIBSection(memDc, ref bmi, 0, out var bits, IntPtr.Zero, 0);
-        var old = Win32.SelectObject(memDc, hBitmap);
-        try
-        {
-            var intervalMs = 1000.0 / _fps;
-            var tick = 0L;
-            while (!_stopping)
+            var target = (long)(tick * intervalMs);
+            var wait = target - _clock.ElapsedMilliseconds;
+            if (wait > 1)
+                Thread.Sleep((int)Math.Min(wait, 50));
+            if (_clock.ElapsedMilliseconds < target)
+                continue;
+            tick = (long)(_clock.ElapsedMilliseconds / intervalMs) + 1; // 慢帧跳拍不追帧
+
+            if (!source.Capture())
+                continue;
+
+            // 编码队列满（编码落后）则丢帧：时长合并机制会自然补齐时间轴
+            if (!_pool.TryDequeue(out var buffer))
             {
-                var target = (long)(tick * intervalMs);
-                var wait = target - _clock.ElapsedMilliseconds;
-                if (wait > 1)
-                    Thread.Sleep((int)Math.Min(wait, 50));
-                if (_clock.ElapsedMilliseconds < target)
+                if (_pooledBuffers >= 6)
                     continue;
-                tick = (long)(_clock.ElapsedMilliseconds / intervalMs) + 1; // 慢帧跳拍不追帧
-
-                if (!Win32.BitBlt(memDc, 0, 0, w, h, screenDc, _region.X, _region.Y,
-                        Win32.SRCCOPY | Win32.CAPTUREBLT))
-                    continue;
-                DrawCursor(memDc);
-
-                // 编码队列满（编码落后）则丢帧：时长合并机制会自然补齐时间轴
-                if (!_pool.TryDequeue(out var buffer))
-                {
-                    if (_pooledBuffers >= 6)
-                        continue;
-                    buffer = new byte[(long)w * h * 4];
-                    _pooledBuffers++;
-                }
-                new ReadOnlySpan<byte>((void*)bits, w * h * 4).CopyTo(buffer);
-                if (!_queue.TryAdd((buffer, _clock.ElapsedMilliseconds)))
-                    _pool.Enqueue(buffer);
+                buffer = new byte[(long)w * h * 4];
+                _pooledBuffers++;
             }
+            new ReadOnlySpan<byte>((void*)source.Bits, w * h * 4).CopyTo(buffer);
+            if (!_queue.TryAdd((buffer, _clock.ElapsedMilliseconds)))
+                _pool.Enqueue(buffer);
         }
-        finally
-        {
-            Win32.SelectObject(memDc, old);
-            Win32.DeleteObject(hBitmap);
-            Win32.DeleteDC(memDc);
-            Win32.ReleaseDC(IntPtr.Zero, screenDc);
-        }
-    }
-
-    /// <summary>把当前光标补绘进帧（BitBlt 不含光标；坐标为物理像素）。</summary>
-    private void DrawCursor(IntPtr memDc)
-    {
-        var ci = new Win32.CURSORINFO
-        {
-            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Win32.CURSORINFO>(),
-        };
-        if (!Win32.GetCursorInfo(ref ci) || ci.flags != Win32.CURSOR_SHOWING
-            || ci.hCursor == IntPtr.Zero)
-            return;
-        uint hotX = 0, hotY = 0;
-        if (Win32.GetIconInfo(ci.hCursor, out var ii))
-        {
-            hotX = ii.xHotspot;
-            hotY = ii.yHotspot;
-            if (ii.hbmMask != IntPtr.Zero) Win32.DeleteObject(ii.hbmMask);
-            if (ii.hbmColor != IntPtr.Zero) Win32.DeleteObject(ii.hbmColor);
-        }
-        Win32.DrawIconEx(memDc,
-            ci.ptScreenPos.X - _region.X - (int)hotX,
-            ci.ptScreenPos.Y - _region.Y - (int)hotY,
-            ci.hCursor, 0, 0, 0, IntPtr.Zero, Win32.DI_NORMAL);
     }
 
     // ---------- 编码线程 ----------

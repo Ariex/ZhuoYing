@@ -21,7 +21,7 @@ public sealed class CaptureOverlayWindow : Window
     private readonly Action _requestSave;
     private readonly Action _requestSaveAs;
     private readonly Action _requestPin;
-    private readonly Action _requestRecord;
+    private readonly Action<RecordFormat> _requestRecord;
     private readonly Action _requestCancel;
     private readonly EditorState _editorState;
     private readonly EditorLayer _editorLayer;
@@ -37,7 +37,7 @@ public sealed class CaptureOverlayWindow : Window
         WriteableBitmap frame, PixelRect virtualBounds,
         SelectionController selection, EditorState editorState,
         Action requestCopy, Action requestSave, Action requestSaveAs,
-        Action requestPin, Action requestRecord, Action requestCancel)
+        Action requestPin, Action<RecordFormat> requestRecord, Action requestCancel)
     {
         _virtualBounds = virtualBounds;
         // 输出（复制/保存）前先提交进行中的文字编辑，输出才包含最新文本
@@ -253,7 +253,12 @@ public sealed class CaptureOverlayWindow : Window
         }
         else if (e.Key == Key.F4)
         {
-            _requestRecord();
+            _requestRecord(RecordFormat.Gif);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.F5)
+        {
+            _requestRecord(RecordFormat.Mp4);
             e.Handled = true;
         }
         else if (ctrl && e.Key == Key.S)
