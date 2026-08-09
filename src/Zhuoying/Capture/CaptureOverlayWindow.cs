@@ -21,6 +21,7 @@ public sealed class CaptureOverlayWindow : Window
     private readonly Action _requestSave;
     private readonly Action _requestSaveAs;
     private readonly Action _requestPin;
+    private readonly Action _requestRecord;
     private readonly Action _requestCancel;
     private readonly EditorState _editorState;
     private readonly EditorLayer _editorLayer;
@@ -36,7 +37,7 @@ public sealed class CaptureOverlayWindow : Window
         WriteableBitmap frame, PixelRect virtualBounds,
         SelectionController selection, EditorState editorState,
         Action requestCopy, Action requestSave, Action requestSaveAs,
-        Action requestPin, Action requestCancel)
+        Action requestPin, Action requestRecord, Action requestCancel)
     {
         _virtualBounds = virtualBounds;
         // 输出（复制/保存）前先提交进行中的文字编辑，输出才包含最新文本
@@ -60,6 +61,7 @@ public sealed class CaptureOverlayWindow : Window
             _textEdit!.Commit();
             requestPin();
         };
+        _requestRecord = requestRecord; // 录制不含标注，无需提交文字编辑
         _requestCancel = requestCancel;
         _editorState = editorState;
 
@@ -103,7 +105,8 @@ public sealed class CaptureOverlayWindow : Window
         GeometryChanged += numberActions.Refresh;
 
         _toolbar = new EditorToolbar(
-            editorState, _requestCopy, _requestSave, _requestSaveAs, _requestPin, requestCancel);
+            editorState, _requestCopy, _requestSave, _requestSaveAs, _requestPin,
+            _requestRecord, requestCancel);
         _toolbar.Root.IsVisible = false;
         // 行显隐刚改完时中间容器的 measure 尚未失效，立刻 Measure 会拿到旧尺寸
         //（曾导致属性行出现后工具条底边溢出屏幕），投递到布局完成后再重摆
@@ -246,6 +249,11 @@ public sealed class CaptureOverlayWindow : Window
         else if (e.Key == Key.F3)
         {
             _requestPin();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.F4)
+        {
+            _requestRecord();
             e.Handled = true;
         }
         else if (ctrl && e.Key == Key.S)

@@ -203,11 +203,29 @@
 - 暂缓：pin_image 工具（贴图需与托盘实例 IPC，Agent API 进程无 UI——
   留待"唤起已有实例"通知机制落地后一并做）
 
+## 阶段十五：GIF 录屏 ✅（2026-08-09 完成，里程碑 0.16）
+
+- [x] GifWriter：手写流式 GIF89a 编码器（放弃 ImageSharp——其动画 GIF 需全帧
+  驻留内存且有许可条款）：帧间差分脏矩形 + 未变化像素透明索引（处置法 1）、
+  八叉树量化 ≤255 色/帧局部色表、LZW（变长码 9→12 位、4096 满发 clear）、
+  NETSCAPE2.0 无限循环；逐帧写盘内存 O(1)
+- [x] GifRecorder：抓帧线程（BitBlt 逐 tick + DrawIconEx 光标补绘 + Stopwatch
+  对齐时间轴慢帧跳拍）→ 有界队列（满则丢帧）→ 编码线程（相同帧
+  SequenceEqual 合并时长、延迟 1/100s 取整误差滚动进位）；缓冲池复用防 GC churn
+- [x] 帧源选 BitBlt 而非 WGC/DDA：录制区域小、逐 tick 数毫秒足够，天然尊重
+  WDA_EXCLUDEFROMCAPTURE；帧源已隔离在抓帧线程内，后续可无痛换 DDA 持久
+  会话/WGC（见后续阶段）
+- [x] RecordingController：活屏录制 UI（非冻结帧模式）——区域红框
+  （WS_EX_TRANSPARENT 点击穿透）+ 控制条（时长/大小/完成/取消），两窗
+  WDA_EXCLUDEFROMCAPTURE 不入镜；完成移入设定目录 + 气泡，取消删临时文件
+- [x] 入口：截屏会话 F4 / 工具条 ⏺ 按钮（选区即录制区域，关会话开录制）
+- [x] 验证：`--test-record`（3s/24fps/100ms 变色动画源 → 28 帧 52KB，解码
+  尺寸/帧数正确、总时长恰 3000ms、色序与动画一致）；`--test-record-ui`
+  全流程落盘；--test-copy 回归；AOT 回归
+
 ## 后续阶段（概要）
 
 - REQUIREMENTS v1 主体功能已全部落地（仅聚光灯暂缓），收尾后可升 1.0
-- [ ] **录屏（WGC 视频捕捉）**：Windows.Graphics.Capture 会话式持续取帧
-  （最低系统要求 Win10 1903 恰为其门槛）；圈定区域后活屏录制——需新的
-  非冻结帧模式（透明边框窗 + 控制条，SetWindowDisplayAffinity 排除自身）；
-  编码输出 GIF（ImageSharp，帧间差分+流式写盘）先行，MP4（Media Foundation
-  H.264）后续；抓帧管线按双输出设计
+- 录屏增强：帧源升级 DDA 持久会话或 WGC（独占全屏/高负载场景）；
+  MP4 输出（Media Foundation H.264，AOT 需手写 COM 互操作）；
+  帧率/含光标做成设置项

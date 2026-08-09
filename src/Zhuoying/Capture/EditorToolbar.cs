@@ -129,7 +129,8 @@ public sealed class EditorToolbar
     }
 
     public EditorToolbar(
-        EditorState state, Action copy, Action save, Action saveAs, Action pin, Action cancel)
+        EditorState state, Action copy, Action save, Action saveAs, Action pin,
+        Action record, Action cancel)
     {
         _state = state;
         _model = state.Model;
@@ -154,6 +155,7 @@ public sealed class EditorToolbar
         var saveButton = ToolButton(SaveIcon(), "保存到默认目录 (Ctrl+S)", save);
         var saveAsButton = ToolButton(SaveAsIcon(), "另存为… (Ctrl+Shift+S)", saveAs);
         var pinButton = ToolButton(PinIcon(), "贴图到屏幕 (F3)", pin);
+        var recordButton = ToolButton(RecordIcon(), "录制 GIF (F4) — 选区活屏录制", record);
         var cancelButton = ToolButton(GlyphIcon("✕"), "取消 (Esc)", cancel);
 
         var toolRow = new StackPanel
@@ -167,7 +169,7 @@ public sealed class EditorToolbar
                 _textToolButton, _numberToolButton, _mosaicToolButton, _eraserToolButton,
                 Separator(),
                 _undoButton, _redoButton, Separator(),
-                copyButton, saveButton, saveAsButton, pinButton, cancelButton,
+                copyButton, saveButton, saveAsButton, pinButton, recordButton, cancelButton,
             },
         };
 
@@ -1761,6 +1763,36 @@ public sealed class EditorToolbar
                     Stroke = stroke,
                     StrokeThickness = 2,
                     StrokeLineCap = PenLineCap.Round,
+                },
+            },
+        };
+    }
+
+    /// <summary>录制图标：圆环 + 红色实心圆点。</summary>
+    private static Control RecordIcon()
+    {
+        return new Canvas
+        {
+            Width = 22,
+            Height = 22,
+            Children =
+            {
+                new Avalonia.Controls.Shapes.Ellipse
+                {
+                    Width = 16,
+                    Height = 16,
+                    Stroke = new SolidColorBrush(IconColor),
+                    StrokeThickness = 1.8,
+                    [Canvas.LeftProperty] = 3.0,
+                    [Canvas.TopProperty] = 3.0,
+                },
+                new Avalonia.Controls.Shapes.Ellipse
+                {
+                    Width = 8,
+                    Height = 8,
+                    Fill = new SolidColorBrush(Color.FromRgb(0xE5, 0x3E, 0x3E)),
+                    [Canvas.LeftProperty] = 7.0,
+                    [Canvas.TopProperty] = 7.0,
                 },
             },
         };

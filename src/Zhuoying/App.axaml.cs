@@ -72,6 +72,8 @@ public partial class App : Application
             SetupTestStampHook(args);
             SetupTestEraserHook(args);
             SetupTestDdaHook(args);
+            SetupTestRecordHook(args);
+            SetupTestRecordUiHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -400,6 +402,91 @@ public partial class App : Application
             DesktopDuplicator.Diag = null;
             (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
         }, TimeSpan.FromMilliseconds(1600));
+    }
+
+    /// <summary>
+    /// 解析 `--test-record "x,y,w,h[,fps[,毫秒]]"`：区域内放一个变色动画小窗
+    ///（可见、不排除，提供确定性画面变化），用 GifRecorder 录指定时长存到
+    /// %TEMP%\zhuoying-record-test.gif，输出帧数/大小到 result.txt 后退出。
+    /// </summary>
+    private void SetupTestRecordHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-record");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var p = args[index + 1].Split(',');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+        var fps = p.Length > 4 ? int.Parse(p[4]) : 24;
+        var durationMs = p.Length > 5 ? int.Parse(p[5]) : 3000;
+        DispatcherTimer.RunOnce(() =>
+        {
+            // 动画源：区域中央变色小窗（每 100ms 换色 → 预期产生多帧）
+            var wnd = new Window
+            {
+                SystemDecorations = SystemDecorations.None,
+                ShowInTaskbar = false,
+                Topmost = true,
+                ShowActivated = false,
+                Width = 60,
+                Height = 40,
+                Background = Avalonia.Media.Brushes.Red,
+                Position = new Avalonia.PixelPoint(
+                    rect.X + rect.Width / 2, rect.Y + rect.Height / 2),
+            };
+            wnd.Show();
+            var tick = 0;
+            var colors = new[]
+            {
+                Avalonia.Media.Brushes.Red, Avalonia.Media.Brushes.Lime,
+                Avalonia.Media.Brushes.Blue, Avalonia.Media.Brushes.Yellow,
+            };
+            var animTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            animTimer.Tick += (_, _) => wnd.Background = colors[++tick % colors.Length];
+            animTimer.Start();
+
+            var gifPath = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "zhuoying-record-test.gif");
+            var recorder = new GifRecorder(rect, fps, gifPath);
+            DispatcherTimer.RunOnce(() =>
+            {
+                recorder.Stop();
+                animTimer.Stop();
+                wnd.Close();
+                var size = new System.IO.FileInfo(gifPath).Length;
+                System.IO.File.WriteAllText(
+                    System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zhuoying-record-test.txt"),
+                    $"path={gifPath}\nframes={recorder.FrameCount}\nbytes={size}\n" +
+                    $"elapsedMs={(long)recorder.Elapsed.TotalMilliseconds}\n");
+                (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+            }, TimeSpan.FromMilliseconds(durationMs));
+        }, TimeSpan.FromMilliseconds(800));
+    }
+
+    /// <summary>
+    /// 解析 `--test-record-ui "x,y,w,h[,毫秒]"`：走完整 RecordingController 流程
+    ///（红框 + 控制条 + 排除入镜 + 完成落盘到默认目录），到时自动"完成"后退出。
+    /// </summary>
+    private void SetupTestRecordUiHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-record-ui");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var p = args[index + 1].Split(',');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+        var durationMs = p.Length > 4 ? int.Parse(p[4]) : 2500;
+        DispatcherTimer.RunOnce(() =>
+        {
+            Zhuoying.Capture.RecordingController.Start(rect, 24, _appSettings.ResolveSavePath());
+            DispatcherTimer.RunOnce(() =>
+            {
+                Zhuoying.Capture.RecordingController.FinishActive();
+                DispatcherTimer.RunOnce(
+                    () => (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown(),
+                    TimeSpan.FromMilliseconds(800));
+            }, TimeSpan.FromMilliseconds(durationMs));
+        }, TimeSpan.FromMilliseconds(800));
     }
 
     private static unsafe long CountPixelDiff(

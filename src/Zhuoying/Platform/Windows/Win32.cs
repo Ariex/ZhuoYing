@@ -245,6 +245,47 @@ internal static class Win32
     public static extern int DwmGetWindowAttributeInt(
         IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
+    // ---------- 光标绘制 / 窗口样式（录屏） ----------
+
+    public const uint CURSOR_SHOWING = 1;
+    public const uint DI_NORMAL = 3;
+    public const long WS_EX_LAYERED = 0x80000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CURSORINFO
+    {
+        public uint cbSize;
+        public uint flags;
+        public IntPtr hCursor;
+        public POINT ptScreenPos;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ICONINFO
+    {
+        public int fIcon;
+        public uint xHotspot;
+        public uint yHotspot;
+        public IntPtr hbmMask;
+        public IntPtr hbmColor;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorInfo(ref CURSORINFO pci);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon,
+        int cxWidth, int cyWidth, uint istepIfAniCur, IntPtr hbrFlickerFreeDraw, uint diFlags);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    public static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
     // ---------- 窗口标题 / 控制台附加（Agent API） ----------
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

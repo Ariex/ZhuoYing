@@ -54,7 +54,7 @@ public sealed class CaptureSession
         _savePath = options.SavePath;
 
         _window = new CaptureOverlayWindow(
-            fullFrame, virtualBounds, _selection, _editor, Copy, Save, SaveAs, Pin, CloseAll);
+            fullFrame, virtualBounds, _selection, _editor, Copy, Save, SaveAs, Pin, Record, CloseAll);
         _window.Opened += (_, _) => { _opened = true; UpdateToolbar(); };
         _window.GeometryChanged += () => { if (_opened) UpdateToolbar(); };
         _window.Closed += (_, _) => CloseAll();
@@ -265,6 +265,25 @@ public sealed class CaptureSession
         _annotations.Elements.Add(el);
         _annotations.Push(new AddElementCommand(_annotations, el));
         _annotations.Selected = el;
+    }
+
+    /// <summary>录制 GIF（F4）：关闭冻结帧会话，对选区开始活屏录制（24fps 采样，
+    /// 相同帧合并时长；不含标注——录屏是活画面，冻结帧标注无意义）。</summary>
+    private void Record()
+    {
+        var sel = _selection.Selection;
+        if (sel.Width <= 0 || sel.Height <= 0)
+            return;
+        var saveDir = _savePath;
+        CloseAll();
+        try
+        {
+            RecordingController.Start(sel, 24, saveDir);
+        }
+        catch (Exception ex)
+        {
+            NotificationToast.Show($"无法开始录制：{ex.Message}");
+        }
     }
 
     /// <summary>贴图（F3）：选区合成后钉成置顶贴图窗（原位、物理像素 1:1），结束会话。</summary>
