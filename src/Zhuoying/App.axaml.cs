@@ -18,6 +18,7 @@ public partial class App : Application
     private SettingsService? _settingsService;
     private AppSettings _appSettings = new();
     private SettingsWindow? _settingsWindow;
+    private Zhuoying.Agent.McpHttpServer? _mcpServer;
 
     public bool HotkeyRegistered { get; private set; }
 
@@ -46,11 +47,13 @@ public partial class App : Application
 
             _hotkey = new WindowsHotkeyService();
             TryApplyHotkey(_appSettings.Hotkey);
+            ApplyMcpService();
 
             desktop.Exit += (_, _) =>
             {
                 PresetsService.SaveFromMemory();
                 _hotkey?.Dispose();
+                _mcpServer?.Dispose();
             };
 
             // 开发自测：--test-capture 自动触发一次抓屏；--test-settings 打开设置窗口；
@@ -661,6 +664,26 @@ public partial class App : Application
         return diff;
     }
 
+    /// <summary>按设置启停内置 MCP 服务（开关即时生效，无需重启）。</summary>
+    private void ApplyMcpService()
+    {
+        var wantPort = _appSettings.McpEnabled ? _appSettings.McpPort : -1;
+        if (_mcpServer != null && _mcpServer.Port == wantPort)
+            return;
+        _mcpServer?.Dispose();
+        _mcpServer = null;
+        if (wantPort <= 0)
+            return;
+        try
+        {
+            _mcpServer = new Zhuoying.Agent.McpHttpServer(wantPort);
+        }
+        catch (Exception)
+        {
+            NotificationToast.Show($"捉影：MCP 服务启动失败，端口 {wantPort} 可能被占用");
+        }
+    }
+
     /// <summary>注册（或改绑）截屏热键并同步托盘提示文案。</summary>
     private bool TryApplyHotkey(HotkeySetting hotkey)
     {
@@ -691,14 +714,18 @@ public partial class App : Application
             _appSettings.AnnotationColors,
             _appSettings.SavePath,
             _appSettings.AgentApiEnabled,
+            _appSettings.McpEnabled,
+            _appSettings.McpPort,
             TryApplyHotkey,
-            (hotkey, colors, savePath, agentApi) =>
+            (hotkey, colors, savePath, agentApi, mcp) =>
             {
                 _appSettings.Hotkey = hotkey;
                 _appSettings.AnnotationColors = colors;
                 _appSettings.SavePath = savePath;
                 _appSettings.AgentApiEnabled = agentApi;
+                _appSettings.McpEnabled = mcp;
                 _settingsService!.Save(_appSettings);
+                ApplyMcpService(); // 开关即时生效
             });
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();

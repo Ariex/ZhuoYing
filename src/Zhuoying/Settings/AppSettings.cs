@@ -21,9 +21,17 @@ public sealed class AppSettings
     /// <summary>保存（Ctrl+S）目标目录；空 = 默认"图片\捉影"。</summary>
     public string SavePath { get; set; } = "";
 
-    /// <summary>允许 Agent API（--api-* 无头命令行与 --mcp 服务器，供 AI Agent
-    /// 获取屏幕信息）。涉及屏幕内容外读，默认关闭，需在设置中显式开启。</summary>
+    /// <summary>允许 Agent API（--api-* 无头命令行，供 AI Agent / 脚本获取
+    /// 屏幕信息）。涉及屏幕内容外读，默认关闭，需在设置中显式开启。</summary>
     public bool AgentApiEnabled { get; set; }
+
+    /// <summary>启用 MCP 服务：托盘实例内置本机 HTTP 服务器
+    ///（http://127.0.0.1:McpPort/mcp，Streamable HTTP 传输），开关即时生效
+    /// 无需重启。默认关闭。</summary>
+    public bool McpEnabled { get; set; }
+
+    /// <summary>MCP 服务端口（仅绑定 127.0.0.1）。</summary>
+    public int McpPort { get; set; } = 8990;
 
     /// <summary>解析实际保存目录（空值回落默认）。</summary>
     public string ResolveSavePath() => string.IsNullOrWhiteSpace(SavePath)

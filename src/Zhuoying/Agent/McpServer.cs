@@ -8,7 +8,8 @@ using Zhuoying.Platform.Windows;
 namespace Zhuoying.Agent;
 
 /// <summary>
-/// MCP（Model Context Protocol）stdio 服务器：newline 分隔 JSON-RPC 2.0。
+/// MCP（Model Context Protocol）JSON-RPC 2.0 消息处理（传输无关；宿主为
+/// McpHttpServer——托盘实例内置本机 HTTP 服务，设置开关即时启停）。
 /// 手写实现而非官方 SDK——只需 initialize/tools/list/tools/call/ping 四个方法，
 /// JsonDocument + Utf8JsonWriter 零反射、NativeAOT 友好、零新依赖。
 ///
@@ -16,55 +17,12 @@ namespace Zhuoying.Agent;
 ///   take_screenshot  区域/显示器/窗口标题三选一定位，返回 PNG 图像内容
 ///   list_windows     可见顶层窗口（标题 + 物理像素矩形）
 ///   get_monitors     显示器拓扑（物理像素 + 缩放比）
-///
-/// Claude Code 配置示例（.mcp.json）：
-///   { "mcpServers": { "zhuoying": { "command": "Zhuoying.exe", "args": ["--mcp"] } } }
 /// </summary>
-internal sealed class McpServer
+internal static class McpProtocol
 {
-    private Stream _stdout = null!;
-
-    public void Run()
-    {
-        _stdout = Console.OpenStandardOutput();
-        using var reader = new StreamReader(
-            Console.OpenStandardInput(), new UTF8Encoding(false));
-        while (reader.ReadLine() is { } line)
-        {
-            if (string.IsNullOrWhiteSpace(line))
-                continue;
-            string? response;
-            try
-            {
-                response = Handle(line);
-            }
-            catch (Exception ex)
-            {
-                response = AgentCli.JsonText(w =>
-                {
-                    w.WriteStartObject();
-                    w.WriteString("jsonrpc", "2.0");
-                    w.WriteNull("id");
-                    w.WriteStartObject("error");
-                    w.WriteNumber("code", -32700);
-                    w.WriteString("message", ex.Message);
-                    w.WriteEndObject();
-                    w.WriteEndObject();
-                });
-            }
-            if (response != null)
-                Send(response);
-        }
-    }
-
-    private void Send(string json)
-    {
-        var bytes = Encoding.UTF8.GetBytes(json + "\n");
-        _stdout.Write(bytes, 0, bytes.Length);
-        _stdout.Flush();
-    }
-
-    private static string? Handle(string line)
+    /// <summary>处理一条 JSON-RPC 消息；通知返回 null（无响应体）。解析异常抛出，
+    /// 由传输层转 -32700。</summary>
+    public static string? HandleMessage(string line)
     {
         using var doc = JsonDocument.Parse(line);
         var root = doc.RootElement;

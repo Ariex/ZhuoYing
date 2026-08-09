@@ -3,6 +3,19 @@
 版本规则见 README「版本号」节：`主.次` 为里程碑（手动），
 文件版本第三、四段为构建时间戳（距 2026-01-01 天数 . 当日分钟数，自动）。
 
+## 0.18 — 2026-08-09（阶段十七：MCP 服务内置化）
+
+- **MCP 服务改为托盘实例内置**（移除 `--mcp` 参数）：设置窗口勾选
+  「启用 MCP 服务」即时启停、默认关闭——无需为 MCP 另起进程或重启程序；
+  传输改为 MCP Streamable HTTP（仅绑定 127.0.0.1，端口默认 8990，
+  settings.json `McpPort` 可改），Claude Code 用
+  `{ "type": "http", "url": "http://127.0.0.1:8990/mcp" }` 一行接入
+- HTTP 层为手写极简 HTTP/1.1（TcpListener）：绕开 http.sys URL ACL 权限、
+  零依赖；校验 Origin 防 DNS rebinding；端口被占用有气泡提示
+- 抓屏并发互斥：MCP 服务线程与截屏会话可能同时走 DDA，共享实例加锁
+- 工具不变：take_screenshot / list_windows / get_monitors；
+  `--api-*` 命令行保留（仍由「允许 Agent API」独立开关控制）
+
 ## 0.17 — 2026-08-09（阶段十六：MP4 录屏）
 
 - **录制 MP4**（截屏会话中 F5 / 工具条 🎬 按钮）：与 GIF 录制同一套活屏

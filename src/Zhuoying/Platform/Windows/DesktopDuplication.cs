@@ -29,7 +29,12 @@ internal sealed unsafe class DesktopDuplicator : IDisposable
 {
     private static DesktopDuplicator? _shared;
 
-    /// <summary>共享实例（UI 线程使用）。设备级异常后调用 <see cref="Reset"/> 重建。</summary>
+    /// <summary>Shared/Reset/CaptureInto 的并发闸：UI 线程（截屏会话）与 MCP
+    /// 服务线程可能同时抓屏，实例内部无线程安全设计，调用方持锁使用。</summary>
+    public static readonly object Gate = new();
+
+    /// <summary>共享实例（调用方须持有 <see cref="Gate"/>）。设备级异常后调用
+    /// <see cref="Reset"/> 重建。</summary>
     public static DesktopDuplicator Shared => _shared ??= new DesktopDuplicator();
 
     public static void Reset()

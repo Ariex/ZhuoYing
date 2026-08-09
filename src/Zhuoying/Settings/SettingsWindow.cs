@@ -18,7 +18,7 @@ public sealed class SettingsWindow : Window
 
     private readonly HotkeySetting _original;
     private readonly Func<HotkeySetting, bool> _tryApply;
-    private readonly Action<HotkeySetting, System.Collections.Generic.List<string>, string, bool> _save;
+    private readonly Action<HotkeySetting, System.Collections.Generic.List<string>, string, bool, bool> _save;
 
     private readonly Border _hotkeyBox;
     private readonly TextBlock _hotkeyText;
@@ -26,6 +26,7 @@ public sealed class SettingsWindow : Window
     private readonly TextBox _savePathBox;
     private readonly CheckBox _startupCheck;
     private readonly CheckBox _agentApiCheck;
+    private readonly CheckBox _mcpCheck;
     private readonly System.Collections.Generic.List<(TextBox Box, Border Preview)> _colorEditors = [];
     private HotkeySetting? _pending;
 
@@ -34,8 +35,10 @@ public sealed class SettingsWindow : Window
         System.Collections.Generic.IReadOnlyList<string> annotationColors,
         string savePath,
         bool agentApiEnabled,
+        bool mcpEnabled,
+        int mcpPort,
         Func<HotkeySetting, bool> tryApply,
-        Action<HotkeySetting, System.Collections.Generic.List<string>, string, bool> save)
+        Action<HotkeySetting, System.Collections.Generic.List<string>, string, bool, bool> save)
     {
         _original = current;
         _tryApply = tryApply;
@@ -166,8 +169,15 @@ public sealed class SettingsWindow : Window
         // Agent API：屏幕内容外读能力，默认关（REQUIREMENTS 安全边界：只"看"不"动"）
         _agentApiCheck = new CheckBox
         {
-            Content = "允许 Agent API（命令行/MCP 获取屏幕信息）",
+            Content = "允许 Agent API（--api-* 命令行获取屏幕信息）",
             IsChecked = agentApiEnabled,
+        };
+
+        // MCP 服务：本实例内置 HTTP 服务器，勾选即时启停无需重启
+        _mcpCheck = new CheckBox
+        {
+            Content = $"启用 MCP 服务（http://127.0.0.1:{mcpPort}/mcp）",
+            IsChecked = mcpEnabled,
         };
 
         Content = new StackPanel
@@ -189,6 +199,7 @@ public sealed class SettingsWindow : Window
                 savePathRow,
                 _startupCheck,
                 _agentApiCheck,
+                _mcpCheck,
                 new TextBlock { Text = "标注预设颜色（最多 10 个，留空跳过）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
                 colorGrid,
                 _errorText,
@@ -262,7 +273,8 @@ public sealed class SettingsWindow : Window
             return;
         }
         Zhuoying.Platform.Windows.StartupManager.SetEnabled(_startupCheck.IsChecked == true);
-        _save(candidate, colors, _savePathBox.Text?.Trim() ?? "", _agentApiCheck.IsChecked == true);
+        _save(candidate, colors, _savePathBox.Text?.Trim() ?? "",
+            _agentApiCheck.IsChecked == true, _mcpCheck.IsChecked == true);
         Close();
     }
 

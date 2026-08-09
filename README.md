@@ -65,10 +65,11 @@ Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原�
 
 ## Agent API（AI Agent 获取屏幕信息）
 
-设置中勾选「允许 Agent API」后（默认关闭），可用无头命令行或 MCP 服务器
-让 AI Agent（如 Claude）获取屏幕信息。第二进程即用即退，与托盘实例互不干扰；
+两种通道让 AI Agent（如 Claude）获取屏幕信息，各有独立开关、默认全关；
 坐标一律为虚拟屏幕物理像素，混合 DPI 多屏下准确；只提供"看"（截图/窗口/
 显示器信息），不提供输入注入。
+
+**命令行**（设置勾选「允许 Agent API」）：第二进程即用即退，与托盘实例互不干扰。
 
 ```powershell
 Zhuoying.exe --api-monitors                        # 显示器拓扑 JSON（边界/缩放比/主屏）
@@ -76,11 +77,13 @@ Zhuoying.exe --api-windows                         # 可见窗口 JSON（标题+
 Zhuoying.exe --api-capture "100,100,800,600" --out shot.png   # 区域截图（也可用 full）
 ```
 
-MCP 接入（Claude Code 项目 `.mcp.json`）：
+**MCP 服务**（设置勾选「启用 MCP 服务」，即时启停无需重启）：托盘常驻实例
+内置本机 HTTP 服务器（仅 127.0.0.1，端口默认 8990、settings.json `McpPort`
+可改）。Claude Code 项目 `.mcp.json` 一行接入：
 
 ```json
 { "mcpServers": { "zhuoying": {
-    "command": "C:\\path\\to\\Zhuoying.exe", "args": ["--mcp"] } } }
+    "type": "http", "url": "http://127.0.0.1:8990/mcp" } } }
 ```
 
 工具：`take_screenshot`（region / monitor / window_title 三选一定位）、

@@ -15,11 +15,12 @@ namespace Zhuoying.Agent;
 ///   --api-monitors                     显示器拓扑 JSON（物理像素 + 缩放比）
 ///   --api-windows                      可见顶层窗口 JSON（标题 + 矩形，Z 序自顶向下）
 ///   --api-capture "x,y,w,h|full" [--out 路径]   区域/全屏截图存 PNG（携带 DPI）
-///   --mcp                              MCP stdio 服务器（工具见 McpServer）
 ///
 /// 特性：第二进程免 UI 即抓即退，不触碰单实例互斥、托盘与热键；坐标一律为
 /// 虚拟屏幕物理像素（与 --test-* 一致）；抓取复用 DDA→BitBlt 产线管线。
 /// 安全边界：只"看"不"动"；默认关闭，需在设置勾选「允许 Agent API」。
+/// MCP 服务不在此处：由托盘常驻实例内置 HTTP 服务承载（McpHttpServer，
+/// 设置开关即时启停，无需为 MCP 另起进程）。
 /// </summary>
 internal static class AgentCli
 {
@@ -27,7 +28,7 @@ internal static class AgentCli
     public static bool TryRun(string[] args, out int exitCode)
     {
         var isApi = Array.Exists(args, a =>
-            a is "--api-monitors" or "--api-windows" or "--api-capture" or "--mcp");
+            a is "--api-monitors" or "--api-windows" or "--api-capture");
         if (!isApi)
         {
             exitCode = 0;
@@ -47,12 +48,6 @@ internal static class AgentCli
 
         try
         {
-            if (Array.IndexOf(args, "--mcp") >= 0)
-            {
-                new McpServer().Run();
-                exitCode = 0;
-                return true;
-            }
             if (Array.IndexOf(args, "--api-monitors") >= 0)
                 Console.WriteLine(MonitorsJson());
             else if (Array.IndexOf(args, "--api-windows") >= 0)
@@ -149,14 +144,17 @@ internal static class AgentCli
         fixed (byte* dst = buffer)
         {
             List<PixelRect> pending;
-            try
+            lock (DesktopDuplicator.Gate) // MCP 服务线程与 UI 抓屏互斥
             {
-                pending = DesktopDuplicator.Shared.CaptureInto(region, dst, stride);
-            }
-            catch
-            {
-                DesktopDuplicator.Reset();
-                pending = [region];
+                try
+                {
+                    pending = DesktopDuplicator.Shared.CaptureInto(region, dst, stride);
+                }
+                catch
+                {
+                    DesktopDuplicator.Reset();
+                    pending = [region];
+                }
             }
             foreach (var r in pending)
                 WindowsScreenCapture.BitBltInto(r,

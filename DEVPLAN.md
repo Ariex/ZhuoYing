@@ -241,6 +241,21 @@
   UI 线程——MF 工作队列死锁，放后台 MTA 线程）；`--test-record-ui …,mp4`
   完整落盘；AOT 回归
 
+## 阶段十七：MCP 服务内置化 ✅（2026-08-09 完成，里程碑 0.18）
+
+- [x] 动机：stdio MCP 必须由客户端拉起独立进程，与"托盘常驻单实例"体验冲突
+  （用户不想为开 MCP 再启一个实例或重启程序）
+- [x] McpHttpServer：托盘实例内置 Streamable HTTP 传输（POST /mcp 单条
+  JSON-RPC → 200 json / 通知 202；GET 405；Origin 校验防 DNS rebinding；
+  仅绑定 127.0.0.1）；手写 TcpListener HTTP/1.1（HttpListener 走 http.sys
+  有非管理员 URL ACL 门槛）；McpServer 拆为传输无关的 McpProtocol
+- [x] 设置「启用 MCP 服务」勾选即时启停（ApplyMcpService，无需重启）、
+  默认关；端口 settings.json McpPort（默认 8990）；占用报气泡
+- [x] DesktopDuplicator.Gate：MCP 线程与 UI 截屏会话的 DDA 并发互斥
+- [x] 移除 `--mcp` 参数；--api-* CLI 保留（「允许 Agent API」独立开关）
+- [x] 验证：常驻实例 initialize/tools/list/get_monitors/take_screenshot 全链路
+  （base64 PNG 合法）；默认关不监听；AOT 回归
+
 ## 后续阶段（概要）
 
 - REQUIREMENTS v1 主体功能已全部落地（仅聚光灯暂缓），收尾后可升 1.0

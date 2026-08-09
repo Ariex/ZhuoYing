@@ -122,14 +122,17 @@ public sealed class WindowsScreenCapture : IScreenCapture
         // DDA 优先（独占全屏/MPO/HDR 正确），任何层面失败回退 BitBlt：
         // 设备级异常 → 重建实例并整块回退；单输出失败/未覆盖区域 → 按矩形回退
         List<PixelRect> pending;
-        try
+        lock (DesktopDuplicator.Gate) // 与 MCP 服务线程的抓屏互斥
         {
-            pending = DesktopDuplicator.Shared.CaptureInto(region, dst, fb.RowBytes);
-        }
-        catch
-        {
-            DesktopDuplicator.Reset();
-            pending = [region];
+            try
+            {
+                pending = DesktopDuplicator.Shared.CaptureInto(region, dst, fb.RowBytes);
+            }
+            catch
+            {
+                DesktopDuplicator.Reset();
+                pending = [region];
+            }
         }
         LastBackendInfo = pending.Count == 0 ? "dda"
             : pending.Count == 1 && pending[0] == region ? "bitblt"
