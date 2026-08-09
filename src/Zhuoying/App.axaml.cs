@@ -71,6 +71,7 @@ public partial class App : Application
             SetupTestPenHook(args);
             SetupTestStampHook(args);
             SetupTestEraserHook(args);
+            SetupTestDdaHook(args);
             if (Array.IndexOf(args, "--test-settings") >= 0)
                 DispatcherTimer.RunOnce(OpenSettings, TimeSpan.FromMilliseconds(500));
         }
@@ -315,6 +316,107 @@ public partial class App : Application
         DispatcherTimer.RunOnce(
             () => _captureController!.TestAddEraser(points, thickness),
             TimeSpan.FromMilliseconds(2600));
+    }
+
+    /// <summary>
+    /// 解析 `--test-dda "x,y,w,h[|输出目录]"`：对同一区域分别用 DDA 优先路径与
+    /// 纯 BitBlt 各抓一次，保存两张 PNG 并输出像素 diff 与耗时（result.txt），
+    /// 然后退出。注意两次抓取相隔数十毫秒，diff 验证应选静止区域。
+    /// </summary>
+    private void SetupTestDdaHook(string[] args)
+    {
+        var index = Array.IndexOf(args, "--test-dda");
+        if (index < 0 || index + 1 >= args.Length)
+            return;
+        var raw = args[index + 1];
+        var sep = raw.IndexOf('|');
+        var outDir = sep >= 0
+            ? raw[(sep + 1)..].Replace("%20", " ")
+            : System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zhuoying-dda");
+        var p = (sep >= 0 ? raw[..sep] : raw).Split(',');
+        var rect = new Avalonia.PixelRect(
+            int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]), int.Parse(p[3]));
+        // 每屏放一个 8×8 闪烁小窗制造确定性合成活动（否则静止桌面下 DDA 拿不到
+        // 真实合成帧、正确地回退 BitBlt，测不到 DDA 路径本身）；小窗设
+        // WDA_EXCLUDEFROMCAPTURE——DDA 与 BitBlt 两路都不可见，不污染 diff
+        var activity = new System.Collections.Generic.List<Window>();
+        DispatcherTimer.RunOnce(() =>
+        {
+            foreach (var mon in new WindowsScreenCapture().GetAllMonitors())
+            {
+                var wnd = new Window
+                {
+                    SystemDecorations = SystemDecorations.None,
+                    ShowInTaskbar = false,
+                    Topmost = true,
+                    ShowActivated = false,
+                    Width = 8,
+                    Height = 8,
+                    Background = Avalonia.Media.Brushes.Red,
+                    Position = new Avalonia.PixelPoint(mon.Bounds.X, mon.Bounds.Y),
+                };
+                wnd.Show();
+                var handle = wnd.TryGetPlatformHandle();
+                if (handle != null)
+                    Win32.SetWindowDisplayAffinity(handle.Handle, Win32.WDA_EXCLUDEFROMCAPTURE);
+                activity.Add(wnd);
+            }
+            var tick = 0;
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+            timer.Tick += (_, _) =>
+            {
+                tick++;
+                foreach (var w in activity)
+                    w.Background = (tick & 1) == 0
+                        ? Avalonia.Media.Brushes.Red : Avalonia.Media.Brushes.Blue;
+            };
+            timer.Start();
+        }, TimeSpan.FromMilliseconds(800));
+
+        DispatcherTimer.RunOnce(() =>
+        {
+            System.IO.Directory.CreateDirectory(outDir);
+            DesktopDuplicator.Diag = new System.Text.StringBuilder();
+            var cap = new WindowsScreenCapture();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            cap.CaptureRegion(rect); // 冷启动：含 D3D 设备创建
+            var tCold = sw.ElapsedMilliseconds;
+            sw.Restart();
+            var dda = cap.CaptureRegion(rect); // 设备已预热
+            var tWarm = sw.ElapsedMilliseconds;
+            var backend = WindowsScreenCapture.LastBackendInfo;
+            sw.Restart();
+            var gdi = cap.CaptureRegionBitBlt(rect);
+            var tGdi = sw.ElapsedMilliseconds;
+            var diff = CountPixelDiff(dda, gdi);
+            foreach (var w in activity)
+                w.Close();
+            dda.Save(System.IO.Path.Combine(outDir, "dda.png"));
+            gdi.Save(System.IO.Path.Combine(outDir, "gdi.png"));
+            System.IO.File.WriteAllText(System.IO.Path.Combine(outDir, "result.txt"),
+                $"backend={backend}\ncold={tCold}ms warm={tWarm}ms bitblt={tGdi}ms\n" +
+                $"diff={diff}/{(long)rect.Width * rect.Height}\n" +
+                DesktopDuplicator.Diag);
+            DesktopDuplicator.Diag = null;
+            (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
+        }, TimeSpan.FromMilliseconds(1600));
+    }
+
+    private static unsafe long CountPixelDiff(
+        Avalonia.Media.Imaging.WriteableBitmap a, Avalonia.Media.Imaging.WriteableBitmap b)
+    {
+        using var fa = a.Lock();
+        using var fb = b.Lock();
+        long diff = 0;
+        for (var y = 0; y < fa.Size.Height; y++)
+        {
+            var pa = (uint*)((byte*)fa.Address + (long)y * fa.RowBytes);
+            var pb = (uint*)((byte*)fb.Address + (long)y * fb.RowBytes);
+            for (var x = 0; x < fa.Size.Width; x++)
+                if (pa[x] != pb[x])
+                    diff++;
+        }
+        return diff;
     }
 
     /// <summary>注册（或改绑）截屏热键并同步托盘提示文案。</summary>

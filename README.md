@@ -5,7 +5,9 @@ Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原�
 
 ## 功能现状（阶段一、二已完成）
 
-- **全局热键截屏**：默认 `Ctrl+1`（可在设置中改键），触发瞬间冻结**整个虚拟屏幕**
+- **全局热键截屏**：默认 `Ctrl+1`（可在设置中改键），触发瞬间冻结**整个虚拟屏幕**；
+  抓屏走 DXGI Desktop Duplication（独占全屏游戏 / 视频硬件叠加层 / HDR 桌面
+  均正确），远程桌面等场景自动按显示器回退 GDI BitBlt
 - **跨屏抓取**：所有显示器同时进入截屏态，默认选区为鼠标所在屏全屏；
   选区可跨显示器拖拽新建、移动、8 手柄调整，混合缩放（如 200% + 150%）下
   按物理像素拼接，像素级准确
@@ -70,8 +72,9 @@ Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原�
 
 - [Avalonia](https://avaloniaui.net/) 11.3 + .NET 10（仅 Windows，Win10 1903+ / Win11）
 - 平台能力（抓屏 / 全局热键 / 剪贴板 / 显示器信息）收敛在 `Platform/` 接口层，
-  Windows 后端以 P/Invoke 实现（GDI BitBlt、RegisterHotKey、OLE 剪贴板），
-  为未来跨平台预留接口
+  Windows 后端以 P/Invoke 实现（DXGI Desktop Duplication + GDI BitBlt 回退、
+  RegisterHotKey、Win32 剪贴板），DXGI/D3D11 的 COM 调用为手写 vtable 函数
+  指针（NativeAOT 兼容），为未来跨平台预留接口
 
 ## 构建与运行
 
@@ -108,7 +111,9 @@ dotnet run --project src\Zhuoying
 `--test-pen "x:y;x:y;...[,粗细[,荧光 0/1[,RRGGBB]]][|下一条…]"`（添加画笔笔迹）、
 `--test-stamp "x,y,w,h[,旋转[,描边宽 0=关[,透明度]]]|素材名或路径"`（添加图章）、
 `--test-eraser "x:y;x:y;...[,粗细]"`（添加橡皮擦除笔迹，2.6s 生效晚于画笔）、
-`--test-save x,y,w,h`（设选区并保存到默认目录）、`--test-pin x,y,w,h`（设选区并贴图）。
+`--test-save x,y,w,h`（设选区并保存到默认目录）、`--test-pin x,y,w,h`（设选区并贴图）、
+`--test-dda "x,y,w,h[|输出目录]"`（DDA 与纯 BitBlt 双路抓取同区域，输出两张 PNG、
+逐像素 diff 与耗时到目录，默认 `%TEMP%\zhuoying-dda`，完成即退出）。
 
 ## 目录结构
 

@@ -85,12 +85,59 @@ public sealed class WindowsScreenCapture : IScreenCapture
     private static PixelRect ToPixelRect(Win32.RECT r) =>
         new(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
 
+    /// <summary>最近一次 CaptureRegion 实际使用的后端（诊断/自测用）：
+    /// "dda" 全 DDA、"bitblt" 全回退、"dda+bitblt(n)" 混合（n 为回退矩形数）。</summary>
+    public static string LastBackendInfo { get; private set; } = "";
+
     public unsafe WriteableBitmap CaptureRegion(PixelRect region)
     {
         int w = region.Width, h = region.Height;
         if (w <= 0 || h <= 0)
             throw new ArgumentException($"非法抓取区域 {region}");
 
+        var bitmap = new WriteableBitmap(
+            new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
+        using var fb = bitmap.Lock();
+        var dst = (byte*)fb.Address;
+
+        // DDA 优先（独占全屏/MPO/HDR 正确），任何层面失败回退 BitBlt：
+        // 设备级异常 → 重建实例并整块回退；单输出失败/未覆盖区域 → 按矩形回退
+        List<PixelRect> pending;
+        try
+        {
+            pending = DesktopDuplicator.Shared.CaptureInto(region, dst, fb.RowBytes);
+        }
+        catch
+        {
+            DesktopDuplicator.Reset();
+            pending = [region];
+        }
+        LastBackendInfo = pending.Count == 0 ? "dda"
+            : pending.Count == 1 && pending[0] == region ? "bitblt"
+            : $"dda+bitblt({pending.Count})";
+        foreach (var r in pending)
+            BitBltInto(r, dst + (long)(r.Y - region.Y) * fb.RowBytes + (long)(r.X - region.X) * 4,
+                fb.RowBytes);
+        return bitmap;
+    }
+
+    /// <summary>强制纯 BitBlt 抓取（DDA 像素一致性自测用，产线走 CaptureRegion）。</summary>
+    public unsafe WriteableBitmap CaptureRegionBitBlt(PixelRect region)
+    {
+        int w = region.Width, h = region.Height;
+        if (w <= 0 || h <= 0)
+            throw new ArgumentException($"非法抓取区域 {region}");
+        var bitmap = new WriteableBitmap(
+            new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
+        using var fb = bitmap.Lock();
+        BitBltInto(region, (byte*)fb.Address, fb.RowBytes);
+        return bitmap;
+    }
+
+    /// <summary>BitBlt 抓取 region 并写入 dst（dst 指向目标位图中 region 左上角像素）。</summary>
+    private static unsafe void BitBltInto(PixelRect region, byte* dst, int dstStride)
+    {
+        int w = region.Width, h = region.Height;
         var screenDc = Win32.GetDC(IntPtr.Zero);
         if (screenDc == IntPtr.Zero)
             throw new InvalidOperationException("GetDC 失败");
@@ -120,20 +167,15 @@ public sealed class WindowsScreenCapture : IScreenCapture
             if (!ok)
                 throw new InvalidOperationException("BitBlt 抓屏失败");
 
-            var bitmap = new WriteableBitmap(
-                new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
-            using var fb = bitmap.Lock();
             var src = (byte*)bits;
-            var dst = (byte*)fb.Address;
             for (var y = 0; y < h; y++)
             {
                 var s = (uint*)(src + (long)y * w * 4);
-                var d = (uint*)(dst + (long)y * fb.RowBytes);
+                var d = (uint*)(dst + (long)y * dstStride);
                 // GDI 输出的 alpha 通道不可靠，强制置为不透明
                 for (var x = 0; x < w; x++)
                     d[x] = s[x] | 0xFF000000u;
             }
-            return bitmap;
         }
         finally
         {

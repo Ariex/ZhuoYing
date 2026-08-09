@@ -222,3 +222,26 @@ Avalonia 11.3 没有公开的"带边界建合成层"的 PushOpacity 重载可用
 **排查陷阱**：验证脚本连续两次"启动应用 → 拷贝 → 读剪贴板"时，第二次拷贝偶发
 失败会静默读到上一次的旧内容，表现为"前后景完全相同/元素消失"的假象——
 每次读取前先 EmptyClipboard，空结果即重试。
+
+## 12. Desktop Duplication 新会话首帧"成功"但内容全黑
+
+**现象**：DDA 抓屏（DuplicateOutput → AcquireNextFrame → CopyResource → Map）
+每一步都返回 S_OK，但读出的像素全为 0。早期测试多次正常（diff=0），
+之后同一代码在所有配置（Debug/Release/AOT）下稳定全黑——"曾经好过"极具迷惑性。
+
+**根因**：`AcquireNextFrame` 成功 ≠ 桌面纹理有效。新建 duplication 会话后，
+若 DWM 尚未产生过新的合成帧，首次 Acquire 会返回一个
+**`LastPresentTime=0`、`AccumulatedFrames=0` 的"仅指针"帧**，此时桌面纹理
+未播种、内容全黑。是否踩中取决于会话创建与 DWM 合成的时序：桌面有任何
+动画/重绘时首帧总是有效（因此早期测试"恰好"通过），桌面完全静止时必黑。
+
+**解决方案**：只接受 `LastPresentTime != 0` 的帧；仅指针帧 ReleaseFrame 放回
+重试（数次、短超时）；超时视为桌面静止，回退 BitBlt——静止桌面 BitBlt 本就
+像素正确，而 DDA 的价值场景（独占全屏游戏、视频 MPO）必有持续合成帧，
+且创建会话本身会触发 MPO 拆除重合成、很快送来真帧。
+
+**验证陷阱**：给 --test-dda 做像素一致性验证时，静止桌面下 DDA 会正确回退
+BitBlt，测不到 DDA 路径本身——测试钩子每屏放一个 8×8 闪烁小窗制造合成活动，
+并设 `WDA_EXCLUDEFROMCAPTURE`（DDA 与 BitBlt 两路都不可见，不污染 diff）。
+另外屏幕自身可能存在低幅动态内容（本机实测 GDI 自身相隔 130ms 双抓
+diff≈2900 像素、幅度 ±1~3），两路抓取非同瞬，diff 达到该本底即视为一致。

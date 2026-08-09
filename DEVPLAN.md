@@ -160,8 +160,40 @@
 - [x] 右键菜单：复制（CloneWithSourceDpi 标记来源 DPI 走 CF_DIB 管线）/另存为（PNG+pHYs）/关闭/关闭全部（静态列表管理，退出全销）
 - [x] ScalingChanged 时按物理尺寸重算窗口（跨屏拖动不跳变）；F3 + 工具条图钉按钮；`--test-pin x,y,w,h`
 
+## 阶段十三：DDA 抓屏后端 ✅（2026-08-09 完成，里程碑 0.14）
+
+- [x] DesktopDuplicator：DXGI Desktop Duplication 为主抓屏——解决真·独占全屏 /
+  MPO 硬件叠加层黑屏、HDR 洗白；全部 COM 调用为手写 vtable 函数指针
+  （delegate* unmanaged），NativeAOT 直接可用
+- [x] 结构：D3D11 设备按适配器常驻预热（纯渲染卡跳过）；显示器每次抓屏现枚举
+  （热插拔/改分辨率天然正确）；duplication 会话即建即弃（不长期禁用 MPO、
+  不占会话名额）；IsCurrent 检测适配器变化时重建
+- [x] 回退：单输出失败（远程桌面/受保护内容/旋转屏/会话占满/无合成帧超时）
+  仅该区域回退 BitBlt（矩形减法拆分）；设备级异常整块回退并重建实例；
+  BitBltInto 抽出为按矩形写入共享缓冲的帮助函数
+- [x] **只接受 LastPresentTime≠0 的真实合成帧**（TROUBLESHOOTING §12：新会话
+  首帧可能是"未播种"仅指针帧，S_OK 但纹理全黑；静止桌面正确回退 BitBlt）
+- [x] HDR：FP16 桌面按显示器 SDR 白电平（DISPLAYCONFIG 查询，失败按 240 nits）
+  归一 + sRGB 编码，65536 项 half→byte LUT 按显示器缓存
+- [x] 自测 `--test-dda "x,y,w,h[|输出目录]"`（每屏 8×8 WDA_EXCLUDEFROMCAPTURE
+  闪烁小窗制造合成活动）：全虚拟屏（双 4K 混合 DPI）backend=dda、与 BitBlt
+  diff=2930 ≈ GDI 自身 130ms 双抓本底 2921（即完全一致）、预热后 48ms vs
+  BitBlt 132ms（约 3 倍）；--test-copy 回归与 AOT 回归通过
+
 ## 后续阶段（概要）
 
-- REQUIREMENTS v1 主体功能已全部落地，收尾后可升 1.0
-- 输出扩展：保存文件、贴图窗口
-- 生命周期完善：开机自启、托盘气泡
+- REQUIREMENTS v1 主体功能已全部落地（仅聚光灯暂缓），收尾后可升 1.0
+- [ ] **Agent API：无头 CLI + MCP 服务器**（供 Claude 等 AI Agent 获取屏幕信息）
+  —— 第一步无头 CLI：`--api-capture "x,y,w,h" --out 文件`（混合 DPI 物理像素正确的
+  区域/全屏截图）、`--api-windows`（GetVisibleWindowRects 窗口列表 JSON）、
+  `--api-monitors`（显示器拓扑+缩放比 JSON）；第二进程免 UI 抓完即退，与托盘
+  单实例不冲突，管线复用现有 --test-* 已验证的路径。第二步 MCP stdio 服务器
+  （官方 `ModelContextProtocol` NuGet）薄包同一管线：take_screenshot /
+  list_windows / get_monitors / pin_image（贴图=agent 向用户"指屏幕"的输出通道）。
+  边界：只"看"不"动"（不做点击注入）；设置中显式开关默认关。放在抓屏后端
+  升级之后（API 直接受益于 DDA 的全屏/HDR 正确性）
+- [ ] **录屏（WGC 视频捕捉）**：Windows.Graphics.Capture 会话式持续取帧
+  （最低系统要求 Win10 1903 恰为其门槛）；圈定区域后活屏录制——需新的
+  非冻结帧模式（透明边框窗 + 控制条，SetWindowDisplayAffinity 排除自身）；
+  编码输出 GIF（ImageSharp，帧间差分+流式写盘）先行，MP4（Media Foundation
+  H.264）后续；抓帧管线按双输出设计

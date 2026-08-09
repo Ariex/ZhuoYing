@@ -245,6 +245,14 @@ internal static class Win32
     public static extern int DwmGetWindowAttributeInt(
         IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
+    // ---------- 窗口捕获排除 ----------
+
+    public const uint WDA_EXCLUDEFROMCAPTURE = 0x11;
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
+
     // ---------- DPI 上下文 ----------
 
     public static readonly IntPtr DPI_AWARENESS_CONTEXT_UNAWARE = new(-1);
