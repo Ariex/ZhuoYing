@@ -180,18 +180,32 @@
   diff=2930 ≈ GDI 自身 130ms 双抓本底 2921（即完全一致）、预热后 48ms vs
   BitBlt 132ms（约 3 倍）；--test-copy 回归与 AOT 回归通过
 
+## 阶段十四：Agent API ✅（2026-08-09 完成，里程碑 0.15）
+
+- [x] 无头 CLI（`Agent/AgentCli.cs`）：`--api-monitors` / `--api-windows`（窗口
+  枚举核心抽出 EnumVisibleWindows 共享，加标题）/ `--api-capture "x,y,w,h|full"
+  [--out 路径]`；Program.Main 在单实例互斥**之前**分流，第二进程免 UI 即抓
+  即退；AttachConsole 附加父控制台（WinExe 无控制台补偿）
+- [x] 抓取复用 DDA→BitBlt 产线管线（CapturePng 直写 byte[]，不初始化 Avalonia
+  平台）；自带 MiniPng 编码器（BGRA→RGB、zlib/Fastest、pHYs DPI；
+  坑：PNG 签名不能写 `"\x89..."u8`——UTF-8 编码把 \x89 变两字节）
+- [x] MCP stdio 服务器（`--mcp`，手写 JSON-RPC 2.0 而非官方 SDK——只需 4 个
+  方法，JsonDocument+Utf8JsonWriter 零反射 AOT 友好零依赖）：initialize/ping/
+  tools/list/tools/call；工具 take_screenshot（region > window_title > monitor >
+  全虚拟屏，返回 base64 PNG image content）/ list_windows / get_monitors；
+  工具失败按 MCP 语义回 isError 结果（坑：stdio 按 newline 分帧，
+  inputSchema raw JSON 必须单行）
+- [x] 安全边界：只"看"不"动"；AppSettings.AgentApiEnabled 默认 false，
+  设置窗口「允许 Agent API」开关；未启用时 exit 2 + `{"error":"agent_api_disabled"}`
+- [x] 验证：门禁 exit 2；monitors/windows JSON 正确（双 4K 拓扑）；capture PNG
+  640×480@192dpi 内容正常；MCP 全会话（init/list/get_monitors/截图 base64
+  解码为合法 PNG/window_title 不存在报 isError）；AOT 回归通过
+- 暂缓：pin_image 工具（贴图需与托盘实例 IPC，Agent API 进程无 UI——
+  留待"唤起已有实例"通知机制落地后一并做）
+
 ## 后续阶段（概要）
 
 - REQUIREMENTS v1 主体功能已全部落地（仅聚光灯暂缓），收尾后可升 1.0
-- [ ] **Agent API：无头 CLI + MCP 服务器**（供 Claude 等 AI Agent 获取屏幕信息）
-  —— 第一步无头 CLI：`--api-capture "x,y,w,h" --out 文件`（混合 DPI 物理像素正确的
-  区域/全屏截图）、`--api-windows`（GetVisibleWindowRects 窗口列表 JSON）、
-  `--api-monitors`（显示器拓扑+缩放比 JSON）；第二进程免 UI 抓完即退，与托盘
-  单实例不冲突，管线复用现有 --test-* 已验证的路径。第二步 MCP stdio 服务器
-  （官方 `ModelContextProtocol` NuGet）薄包同一管线：take_screenshot /
-  list_windows / get_monitors / pin_image（贴图=agent 向用户"指屏幕"的输出通道）。
-  边界：只"看"不"动"（不做点击注入）；设置中显式开关默认关。放在抓屏后端
-  升级之后（API 直接受益于 DDA 的全屏/HDR 正确性）
 - [ ] **录屏（WGC 视频捕捉）**：Windows.Graphics.Capture 会话式持续取帧
   （最低系统要求 Win10 1903 恰为其门槛）；圈定区域后活屏录制——需新的
   非冻结帧模式（透明边框窗 + 控制条，SetWindowDisplayAffinity 排除自身）；

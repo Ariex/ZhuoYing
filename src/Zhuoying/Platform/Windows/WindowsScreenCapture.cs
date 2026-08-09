@@ -36,6 +36,26 @@ public sealed class WindowsScreenCapture : IScreenCapture
     public IReadOnlyList<PixelRect> GetVisibleWindowRects()
     {
         var list = new List<PixelRect>();
+        EnumVisibleWindows((_, rect) => list.Add(rect));
+        return list;
+    }
+
+    /// <summary>带标题的可见窗口快照（Agent API 用，过滤规则同 GetVisibleWindowRects）。</summary>
+    internal static List<(string Title, PixelRect Rect)> GetVisibleWindowsWithTitles()
+    {
+        var buffer = new char[512];
+        var list = new List<(string, PixelRect)>();
+        EnumVisibleWindows((hWnd, rect) =>
+        {
+            var len = Win32.GetWindowTextW(hWnd, buffer, buffer.Length);
+            list.Add((new string(buffer, 0, Math.Max(0, len)), rect));
+        });
+        return list;
+    }
+
+    /// <summary>枚举可见顶层窗口（自顶向下 Z 序，DWM 扩展边界物理像素）。</summary>
+    private static void EnumVisibleWindows(Action<IntPtr, PixelRect> visit)
+    {
         Win32.EnumWindows((hWnd, _) =>
         {
             // EnumWindows 自顶向下：列表序即 Z 序（靠前在上）
@@ -59,10 +79,9 @@ public sealed class WindowsScreenCapture : IScreenCapture
             var h = rect.Bottom - rect.Top;
             if (w < 16 || h < 16)
                 return true;
-            list.Add(new PixelRect(rect.Left, rect.Top, w, h));
+            visit(hWnd, new PixelRect(rect.Left, rect.Top, w, h));
             return true;
         }, IntPtr.Zero);
-        return list;
     }
 
     private static MonitorInfo ReadMonitor(IntPtr hMonitor)
@@ -135,7 +154,7 @@ public sealed class WindowsScreenCapture : IScreenCapture
     }
 
     /// <summary>BitBlt 抓取 region 并写入 dst（dst 指向目标位图中 region 左上角像素）。</summary>
-    private static unsafe void BitBltInto(PixelRect region, byte* dst, int dstStride)
+    internal static unsafe void BitBltInto(PixelRect region, byte* dst, int dstStride)
     {
         int w = region.Width, h = region.Height;
         var screenDc = Win32.GetDC(IntPtr.Zero);

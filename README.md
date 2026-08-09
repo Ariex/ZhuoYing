@@ -59,6 +59,29 @@ Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原�
 （画笔/马赛克/橡皮/图章），之后是保存文件与贴图窗口等，
 完整需求见 [REQUIREMENTS.md](REQUIREMENTS.md) 与 [TOOLS-SPEC.md](TOOLS-SPEC.md)。
 
+## Agent API（AI Agent 获取屏幕信息）
+
+设置中勾选「允许 Agent API」后（默认关闭），可用无头命令行或 MCP 服务器
+让 AI Agent（如 Claude）获取屏幕信息。第二进程即用即退，与托盘实例互不干扰；
+坐标一律为虚拟屏幕物理像素，混合 DPI 多屏下准确；只提供"看"（截图/窗口/
+显示器信息），不提供输入注入。
+
+```powershell
+Zhuoying.exe --api-monitors                        # 显示器拓扑 JSON（边界/缩放比/主屏）
+Zhuoying.exe --api-windows                         # 可见窗口 JSON（标题+矩形，Z 序）
+Zhuoying.exe --api-capture "100,100,800,600" --out shot.png   # 区域截图（也可用 full）
+```
+
+MCP 接入（Claude Code 项目 `.mcp.json`）：
+
+```json
+{ "mcpServers": { "zhuoying": {
+    "command": "C:\\path\\to\\Zhuoying.exe", "args": ["--mcp"] } } }
+```
+
+工具：`take_screenshot`（region / monitor / window_title 三选一定位）、
+`list_windows`、`get_monitors`。
+
 ## 版本号
 
 版本号单一来源为根目录 `Directory.Build.props`，规则：

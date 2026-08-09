@@ -448,12 +448,14 @@ public partial class App : Application
             _appSettings.Hotkey,
             _appSettings.AnnotationColors,
             _appSettings.SavePath,
+            _appSettings.AgentApiEnabled,
             TryApplyHotkey,
-            (hotkey, colors, savePath) =>
+            (hotkey, colors, savePath, agentApi) =>
             {
                 _appSettings.Hotkey = hotkey;
                 _appSettings.AnnotationColors = colors;
                 _appSettings.SavePath = savePath;
+                _appSettings.AgentApiEnabled = agentApi;
                 _settingsService!.Save(_appSettings);
             });
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;

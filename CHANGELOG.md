@@ -3,6 +3,21 @@
 版本规则见 README「版本号」节：`主.次` 为里程碑（手动），
 文件版本第三、四段为构建时间戳（距 2026-01-01 天数 . 当日分钟数，自动）。
 
+## 0.15 — 2026-08-09（阶段十四：Agent API）
+
+- **无头命令行**（供 AI Agent / 脚本获取屏幕信息，第二进程即用即退，
+  与托盘实例互不干扰；坐标一律为虚拟屏幕物理像素）：
+  - `--api-monitors`：显示器拓扑 JSON（物理边界/工作区/缩放比/主屏）
+  - `--api-windows`：可见顶层窗口 JSON（标题 + 矩形，Z 序自顶向下，
+    过滤规则与窗口吸附一致）
+  - `--api-capture "x,y,w,h|full" [--out 路径]`：区域/全虚拟屏截图存 PNG
+    （DDA→BitBlt 产线管线、携带来源 DPI；自带极简 PNG 编码器零框架依赖）
+- **MCP 服务器**（`--mcp`，stdio JSON-RPC，手写实现零新依赖）：
+  工具 take_screenshot（region/monitor/window_title 三选一定位，返回 PNG
+  图像内容）/ list_windows / get_monitors；Claude Code 一行配置接入
+- **安全边界**：只"看"不"动"（无输入注入）；默认关闭，
+  设置窗口新增「允许 Agent API」开关（settings.json `AgentApiEnabled`）
+
 ## 0.14 — 2026-08-09（阶段十三：DDA 抓屏后端）
 
 - **抓屏后端升级为 DXGI Desktop Duplication（BitBlt 自动回退）**：

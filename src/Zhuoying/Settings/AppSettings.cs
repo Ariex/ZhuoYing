@@ -21,6 +21,10 @@ public sealed class AppSettings
     /// <summary>保存（Ctrl+S）目标目录；空 = 默认"图片\捉影"。</summary>
     public string SavePath { get; set; } = "";
 
+    /// <summary>允许 Agent API（--api-* 无头命令行与 --mcp 服务器，供 AI Agent
+    /// 获取屏幕信息）。涉及屏幕内容外读，默认关闭，需在设置中显式开启。</summary>
+    public bool AgentApiEnabled { get; set; }
+
     /// <summary>解析实际保存目录（空值回落默认）。</summary>
     public string ResolveSavePath() => string.IsNullOrWhiteSpace(SavePath)
         ? System.IO.Path.Combine(

@@ -18,13 +18,14 @@ public sealed class SettingsWindow : Window
 
     private readonly HotkeySetting _original;
     private readonly Func<HotkeySetting, bool> _tryApply;
-    private readonly Action<HotkeySetting, System.Collections.Generic.List<string>, string> _save;
+    private readonly Action<HotkeySetting, System.Collections.Generic.List<string>, string, bool> _save;
 
     private readonly Border _hotkeyBox;
     private readonly TextBlock _hotkeyText;
     private readonly TextBlock _errorText;
     private readonly TextBox _savePathBox;
     private readonly CheckBox _startupCheck;
+    private readonly CheckBox _agentApiCheck;
     private readonly System.Collections.Generic.List<(TextBox Box, Border Preview)> _colorEditors = [];
     private HotkeySetting? _pending;
 
@@ -32,8 +33,9 @@ public sealed class SettingsWindow : Window
         HotkeySetting current,
         System.Collections.Generic.IReadOnlyList<string> annotationColors,
         string savePath,
+        bool agentApiEnabled,
         Func<HotkeySetting, bool> tryApply,
-        Action<HotkeySetting, System.Collections.Generic.List<string>, string> save)
+        Action<HotkeySetting, System.Collections.Generic.List<string>, string, bool> save)
     {
         _original = current;
         _tryApply = tryApply;
@@ -161,6 +163,13 @@ public sealed class SettingsWindow : Window
             IsChecked = Zhuoying.Platform.Windows.StartupManager.IsEnabled(),
         };
 
+        // Agent API：屏幕内容外读能力，默认关（REQUIREMENTS 安全边界：只"看"不"动"）
+        _agentApiCheck = new CheckBox
+        {
+            Content = "允许 Agent API（命令行/MCP 获取屏幕信息）",
+            IsChecked = agentApiEnabled,
+        };
+
         Content = new StackPanel
         {
             Margin = new Thickness(20),
@@ -179,6 +188,7 @@ public sealed class SettingsWindow : Window
                 new TextBlock { Text = "保存目录（Ctrl+S）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
                 savePathRow,
                 _startupCheck,
+                _agentApiCheck,
                 new TextBlock { Text = "标注预设颜色（最多 10 个，留空跳过）", FontSize = 13, Margin = new Thickness(0, 8, 0, 0) },
                 colorGrid,
                 _errorText,
@@ -252,7 +262,7 @@ public sealed class SettingsWindow : Window
             return;
         }
         Zhuoying.Platform.Windows.StartupManager.SetEnabled(_startupCheck.IsChecked == true);
-        _save(candidate, colors, _savePathBox.Text?.Trim() ?? "");
+        _save(candidate, colors, _savePathBox.Text?.Trim() ?? "", _agentApiCheck.IsChecked == true);
         Close();
     }
 

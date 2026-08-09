@@ -245,6 +245,17 @@ internal static class Win32
     public static extern int DwmGetWindowAttributeInt(
         IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
+    // ---------- 窗口标题 / 控制台附加（Agent API） ----------
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextW(IntPtr hWnd, char[] lpString, int nMaxCount);
+
+    public const uint ATTACH_PARENT_PROCESS = unchecked((uint)-1);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AttachConsole(uint dwProcessId);
+
     // ---------- 窗口捕获排除 ----------
 
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x11;
