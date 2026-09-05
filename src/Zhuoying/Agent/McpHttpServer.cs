@@ -13,8 +13,9 @@ namespace Zhuoying.Agent;
 ///
 /// 手写极简 HTTP/1.1（TcpListener）而非 HttpListener：绕开 http.sys 的
 /// URL ACL 权限差异，零依赖可预期。协议面：POST /mcp 携带单条 JSON-RPC，
-/// 请求回 200 application/json、通知回 202；GET 回 405（不提供 SSE 推送，
-/// 规范允许）；校验 Origin 防 DNS rebinding。
+/// 请求回 200 application/json、通知回 202；GET /help 返回给人看的使用说明页
+/// （与 initialize 的 instructions 同源）；其余 GET（含根路径）一律 405，
+/// 刻意不暴露服务身份（不提供 SSE 推送，规范允许）；校验 Origin 防 DNS rebinding。
 ///
 /// Claude Code 配置示例（.mcp.json）：
 ///   { "mcpServers": { "zhuoying": { "type": "http", "url": "http://127.0.0.1:8990/mcp" } } }
@@ -76,7 +77,7 @@ internal sealed class McpHttpServer : IDisposable
     }
 
     /// <summary>处理一次请求；返回 false 表示连接应关闭。</summary>
-    private static bool HandleOneRequest(NetworkStream stream)
+    private bool HandleOneRequest(NetworkStream stream)
     {
         var head = ReadHead(stream);
         if (head == null)
@@ -86,6 +87,10 @@ internal sealed class McpHttpServer : IDisposable
         if (requestParts.Length < 3)
             return false;
         var method = requestParts[0];
+        var path = requestParts[1];
+        var query = path.IndexOf('?');
+        if (query >= 0)
+            path = path[..query];
 
         var contentLength = 0;
         string? origin = null;
@@ -121,6 +126,12 @@ internal sealed class McpHttpServer : IDisposable
         }
 
         var body = contentLength > 0 ? ReadBody(stream, contentLength) : null;
+        if (method == "GET" && path == "/help")
+        {
+            Respond(stream, "200 OK", HelpPage(), keepAlive,
+                contentType: "text/html; charset=utf-8");
+            return keepAlive;
+        }
         if (method != "POST")
         {
             Respond(stream, "405 Method Not Allowed", null, keepAlive, "Allow: POST\r\n");
@@ -193,11 +204,46 @@ internal sealed class McpHttpServer : IDisposable
         return body;
     }
 
+    /// <summary>给人看的使用说明页（GET /help）：说明文本与 initialize 的
+    /// instructions 同源，另附本机端点与 Claude Code 配置示例。</summary>
+    private byte[] HelpPage()
+    {
+        var html = $$"""
+            <!doctype html>
+            <html lang="zh-CN">
+            <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>捉影 MCP 服务器</title>
+            <style>
+              body { font-family: system-ui, "Microsoft YaHei", sans-serif; max-width: 46rem;
+                     margin: 3rem auto; padding: 0 1.5rem; line-height: 1.7; color: #24292f; }
+              h1 { font-size: 1.4rem; }
+              h2 { font-size: 1.1rem; margin-top: 2rem; }
+              .muted { color: #6a737d; font-size: .9rem; font-weight: normal; }
+              pre { font-family: Consolas, "Courier New", monospace; background: #f6f8fa;
+                    border-radius: 6px; padding: 1em; overflow-x: auto; white-space: pre-wrap; }
+            </style>
+            </head>
+            <body>
+            <h1>捉影 MCP 服务器 <span class="muted">v{{AppVersion.Display}}</span></h1>
+            <p>MCP（Streamable HTTP）端点：<b>POST http://127.0.0.1:{{Port}}/mcp</b>，仅绑定本机回环地址。</p>
+            <h2>Claude Code 配置（.mcp.json）</h2>
+            <pre>{ "mcpServers": { "zhuoying": { "type": "http", "url": "http://127.0.0.1:{{Port}}/mcp" } } }</pre>
+            <h2>使用说明</h2>
+            <p class="muted">以下内容与 initialize 响应的 instructions 字段同源，连接后模型会自动读到。</p>
+            <pre>{{McpProtocol.Instructions}}</pre>
+            </body>
+            </html>
+            """;
+        return Encoding.UTF8.GetBytes(html);
+    }
+
     private static void Respond(NetworkStream stream, string status, byte[]? body,
-        bool keepAlive, string extraHeaders = "")
+        bool keepAlive, string extraHeaders = "", string contentType = "application/json")
     {
         var header = $"HTTP/1.1 {status}\r\n"
-            + (body != null ? "Content-Type: application/json\r\n" : "")
+            + (body != null ? $"Content-Type: {contentType}\r\n" : "")
             + $"Content-Length: {body?.Length ?? 0}\r\n"
             + $"Connection: {(keepAlive ? "keep-alive" : "close")}\r\n"
             + extraHeaders

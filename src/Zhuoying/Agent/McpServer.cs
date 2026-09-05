@@ -20,6 +20,29 @@ namespace Zhuoying.Agent;
 /// </summary>
 internal static class McpProtocol
 {
+    /// <summary>服务器使用说明——单一来源：initialize 响应的 instructions 字段（并入
+    /// 模型上下文，MCP 的官方"技能"通道）与 GET /help 页面（给人看）共用。</summary>
+    public const string Instructions =
+        """
+        捉影（zhuoying）截屏 MCP 服务器：只读观察屏幕，不做任何输入或修改。
+
+        坐标体系：所有坐标均为虚拟屏幕物理像素（非 DIP）。混合 DPI 多屏下先调
+        get_monitors 获取各显示器的物理边界与缩放比，再据此换算区域。
+
+        工具用法：
+        - get_monitors：显示器拓扑（物理像素边界/工作区、缩放比、主屏标记）。
+        - list_windows：可见顶层窗口列表（标题 + 物理像素矩形，自顶向下 Z 序，
+          已过滤最小化/隐身/穿透层）。
+        - take_screenshot：截屏返回 PNG。region / monitor / window_title 三选一：
+          region 为 {x,y,w,h} 物理像素区域；monitor 为 get_monitors 的 index；
+          window_title 为标题子串（不区分大小写，取 Z 序最顶的匹配窗口）；
+          全省略 = 整个虚拟屏幕——多屏时图像很大，优先指定区域或显示器。
+          独占全屏游戏、视频叠加层、HDR 桌面均能正确捕获。
+
+        推荐流程：get_monitors / list_windows 定位目标 → take_screenshot 按区域
+        截取 → 需要跟踪画面变化时对同一区域重复截取比对。
+        """;
+
     /// <summary>处理一条 JSON-RPC 消息；通知返回 null（无响应体）。解析异常抛出，
     /// 由传输层转 -32700。</summary>
     public static string? HandleMessage(string line)
@@ -53,6 +76,7 @@ internal static class McpProtocol
                     w.WriteString("name", "zhuoying");
                     w.WriteString("version", AppVersion.Display);
                     w.WriteEndObject();
+                    w.WriteString("instructions", Instructions);
                 });
             }
             case "notifications/initialized":
