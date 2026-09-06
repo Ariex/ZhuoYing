@@ -4,7 +4,10 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using Avalonia;
+using Zhuoying.Platform;
+#if ZY_WINDOWS
 using Zhuoying.Platform.Windows;
+#endif
 using Zhuoying.Settings;
 
 namespace Zhuoying.Agent;
@@ -35,8 +38,11 @@ internal static class AgentCli
             return false;
         }
 
-        // WinExe 无控制台：附加到父进程控制台（重定向管道时无需，失败无妨）
+#if ZY_WINDOWS
+        // WinExe 无控制台：附加到父进程控制台（重定向管道时无需，失败无妨）。
+        // Linux 上进程本就是 Exe、stdout 直连终端，无需补偿。
         Win32.AttachConsole(Win32.ATTACH_PARENT_PROCESS);
+#endif
 
         if (!new SettingsService().Load().AgentApiEnabled)
         {
@@ -118,7 +124,7 @@ internal static class AgentCli
     {
         PixelRect union = default;
         var first = true;
-        foreach (var mon in new WindowsScreenCapture().GetAllMonitors())
+        foreach (var mon in PlatformServices.ScreenCapture.GetAllMonitors())
         {
             union = first ? mon.Bounds : Union(union, mon.Bounds);
             first = false;
@@ -143,27 +149,14 @@ internal static class AgentCli
         var buffer = new byte[(long)stride * region.Height];
         fixed (byte* dst = buffer)
         {
-            List<PixelRect> pending;
-            lock (DesktopDuplicator.Gate) // MCP 服务线程与 UI 抓屏互斥
-            {
-                try
-                {
-                    pending = DesktopDuplicator.Shared.CaptureInto(region, dst, stride);
-                }
-                catch
-                {
-                    DesktopDuplicator.Reset();
-                    pending = [region];
-                }
-            }
-            foreach (var r in pending)
-                WindowsScreenCapture.BitBltInto(r,
-                    dst + (long)(r.Y - region.Y) * stride + (long)(r.X - region.X) * 4, stride);
+            // 与产线抓屏同一条管线（Windows: DDA + BitBlt 回退；Linux: XGetImage），
+            // 平台内部各自处理与 MCP 服务线程的互斥
+            PlatformServices.ScreenCapture.CaptureInto(region, dst, stride);
 
             // DPI 取与选区重叠面积最大的显示器（与保存/复制一致）
             double scaling = 1;
             long best = -1;
-            foreach (var mon in new WindowsScreenCapture().GetAllMonitors())
+            foreach (var mon in PlatformServices.ScreenCapture.GetAllMonitors())
             {
                 var i = region.Intersect(mon.Bounds);
                 var area = (long)Math.Max(0, i.Width) * Math.Max(0, i.Height);
@@ -182,7 +175,7 @@ internal static class AgentCli
     {
         w.WriteStartArray();
         var index = 0;
-        foreach (var mon in new WindowsScreenCapture().GetAllMonitors())
+        foreach (var mon in PlatformServices.ScreenCapture.GetAllMonitors())
         {
             w.WriteStartObject();
             w.WriteNumber("index", index++);
@@ -204,7 +197,7 @@ internal static class AgentCli
     internal static string WindowsJson() => JsonText(w =>
     {
         w.WriteStartArray();
-        foreach (var (title, rect) in WindowsScreenCapture.GetVisibleWindowsWithTitles())
+        foreach (var (title, rect) in PlatformServices.ScreenCapture.GetVisibleWindowsWithTitles())
         {
             w.WriteStartObject();
             w.WriteString("title", title);

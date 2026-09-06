@@ -3,6 +3,26 @@
 版本规则见 README「版本号」节：`主.次` 为里程碑（手动），
 文件版本第三、四段为构建时间戳（距 2026-01-01 天数 . 当日分钟数，自动）。
 
+## 0.19 — 2026-09-06（阶段十八：Linux 移植）
+
+- **Linux 支持**：X11 与 Wayland 两套后端，REQUIREMENTS v1 功能全部可用
+  （抓屏 / 9 种标注 / 剪贴板 / 保存 / 钉屏 / GIF / MP4 / 全局热键 /
+  开机自启 / Agent API / MCP）
+- **平台边界收敛**：上层一律经 `Platform/PlatformServices` 取服务，
+  `Platform/Windows` 与 `Platform/Linux` 互斥编译；新增 `IStartupManager` /
+  `IWindowEffects` / `IFrameSource` / `IVideoEncoder` 四个接口。**Windows 行为不变**
+- Wayland 抓屏走 xdg-desktop-portal ScreenCast + PipeWire，`persist_mode` 一次授权
+  长期静默；全局热键走 portal GlobalShortcuts（要求 app id，须经 .desktop 启动）
+- 新增 `build-linux.sh`（构建/运行/发布/AOT）与 `install-linux.sh`（安装桌面项）
+- **Linux NativeAOT 可用**：`./build-linux.sh aot`，exe 32MB + 原生库共约 46MB，
+  15 项回归全绿（含 SVG 光栅化与 UnmanagedCallersOnly 回调）
+- **修正 GIF 编码器的 LZW 码宽 bug**（平台无关，Windows 同样受影响）：升位时机
+  早了一个码，导致整帧码流比特错位。因帧间差分让小帧躲过升位点、且主流播放器
+  对 LZW 错误容错，此前一直未被发现（TROUBLESHOOTING §16）
+- 录制红框在不支持排除捕获的平台改用四条实心边条贴区域外沿，不再依赖窗口透明；
+  控制条停不进区域外时隐藏，确保控件不入镜
+- `--test-mp4` 采样点改为与显示器缩放无关（原按 200% 硬编码，无缩放屏上采到窗外）
+
 ## 0.18 — 2026-08-09（阶段十七：MCP 服务内置化）
 
 - **MCP 服务改为托盘实例内置**（移除 `--mcp` 参数）：设置窗口勾选

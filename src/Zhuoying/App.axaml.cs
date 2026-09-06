@@ -6,7 +6,9 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Zhuoying.Capture;
 using Zhuoying.Platform;
+#if ZY_WINDOWS
 using Zhuoying.Platform.Windows;
+#endif
 using Zhuoying.Settings;
 
 namespace Zhuoying;
@@ -36,7 +38,7 @@ public partial class App : Application
             PresetsService.LoadIntoMemory(); // 各工具"上次使用的样式"跨重启恢复
 
             _captureController = new CaptureController(
-                new WindowsScreenCapture(), new WindowsClipboardImage(),
+                PlatformServices.ScreenCapture, PlatformServices.ClipboardImage,
                 () => new Zhuoying.Capture.EditorOptions(
                     GetAnnotationColors(),
                     Math.Max(1, _appSettings.FontSizeMin),
@@ -45,7 +47,7 @@ public partial class App : Application
 
             _captureController.SessionFinished += PresetsService.SaveFromMemory;
 
-            _hotkey = new WindowsHotkeyService();
+            _hotkey = PlatformServices.CreateHotkeyService();
             TryApplyHotkey(_appSettings.Hotkey);
             ApplyMcpService();
 
@@ -74,7 +76,9 @@ public partial class App : Application
             SetupTestPenHook(args);
             SetupTestStampHook(args);
             SetupTestEraserHook(args);
+#if ZY_WINDOWS
             SetupTestDdaHook(args);
+#endif
             SetupTestRecordHook(args);
             SetupTestRecordUiHook(args);
             SetupTestMp4Hook(args);
@@ -324,6 +328,9 @@ public partial class App : Application
             TimeSpan.FromMilliseconds(2600));
     }
 
+#if ZY_WINDOWS
+    // --test-dda 是 DDA(Desktop Duplication) 与 BitBlt 的双路一致性自测，
+    // 两者都是 Windows 专属后端，Linux 侧抓屏只有 XGetImage 一条路，无对应项。
     /// <summary>
     /// 解析 `--test-dda "x,y,w,h[|输出目录]"`：对同一区域分别用 DDA 优先路径与
     /// 纯 BitBlt 各抓一次，保存两张 PNG 并输出像素 diff 与耗时（result.txt），
@@ -407,6 +414,7 @@ public partial class App : Application
             (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
         }, TimeSpan.FromMilliseconds(1600));
     }
+#endif
 
     /// <summary>
     /// 解析 `--test-record "x,y,w,h[,fps[,毫秒]]"`：区域内放一个变色动画小窗
@@ -515,9 +523,12 @@ public partial class App : Application
                 recorder.Stop();
                 animTimer.Stop();
                 wnd.Close();
-                // 采样点 = 动画窗中心（区域相对物理像素；窗宽 60/高 40 DIP×2 缩放）
-                var sampleX = rect.Width / 4 + 60;
-                var sampleY = rect.Height / 4 + 40;
+                // 采样点取动画窗左上角内缩 5px（区域相对物理像素）。
+                // 不能用"窗口中心"：窗宽高是 DIP，物理尺寸随显示器缩放变化，
+                // 按 200% 硬算出的中心点在无缩放的显示器上会落到窗外
+                // （Linux 移植时实测采到的是窗外底色，见 docs/LINUX-PORT.md）。
+                var sampleX = rect.Width / 4 + 5;
+                var sampleY = rect.Height / 4 + 5;
                 // 同步 SourceReader 不能跑在 STA 的 UI 线程（MF 工作队列死锁），
                 // 放到后台 MTA 线程解码
                 new System.Threading.Thread(() =>
@@ -525,7 +536,7 @@ public partial class App : Application
                     string report;
                     try
                     {
-                        report = ProbeMp4(mp4Path, sampleX, sampleY);
+                        report = Zhuoying.Platform.PlatformServices.ProbeVideo(mp4Path, sampleX, sampleY);
                     }
                     catch (Exception ex)
                     {
@@ -542,81 +553,6 @@ public partial class App : Application
         }, TimeSpan.FromMilliseconds(800));
     }
 
-    /// <summary>解码 MP4 前若干帧，报告尺寸/帧数与指定像素的颜色序列。</summary>
-    private static string ProbeMp4(string path, int x, int y)
-    {
-        MediaFoundation.Startup();
-        var reader = IntPtr.Zero;
-        var request = IntPtr.Zero;
-        var current = IntPtr.Zero;
-        try
-        {
-            // 解码到 RGB32 需显式开视频处理（否则 SetCurrentMediaType 报
-            // MF_E_INVALIDMEDIATYPE 0xC00D36B4）
-            MediaFoundation.Check(
-                MediaFoundation.MFCreateAttributes(out var attrs, 1), "MFCreateAttributes");
-            MediaFoundation.SetU32(attrs,
-                MediaFoundation.MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1);
-            var hrReader = MediaFoundation.MFCreateSourceReaderFromURL(path, attrs, out reader);
-            MediaFoundation.Release(ref attrs);
-            MediaFoundation.Check(hrReader, "MFCreateSourceReaderFromURL");
-            MediaFoundation.Check(MediaFoundation.MFCreateMediaType(out request), "MFCreateMediaType");
-            MediaFoundation.SetGuid(request,
-                MediaFoundation.MF_MT_MAJOR_TYPE, MediaFoundation.MFMediaType_Video);
-            MediaFoundation.SetGuid(request,
-                MediaFoundation.MF_MT_SUBTYPE, MediaFoundation.MFVideoFormat_RGB32);
-            MediaFoundation.ReaderSetMediaType(reader,
-                MediaFoundation.MF_SOURCE_READER_FIRST_VIDEO_STREAM, request);
-
-            current = MediaFoundation.ReaderGetMediaType(reader,
-                MediaFoundation.MF_SOURCE_READER_FIRST_VIDEO_STREAM);
-            MediaFoundation.TryGetU64(current, MediaFoundation.MF_MT_FRAME_SIZE, out var size);
-            var w = (int)(size >> 32);
-            var h = (int)(size & 0xFFFFFFFF);
-            var strideTopDown = w * 4;
-            if (MediaFoundation.TryGetU32(current, MediaFoundation.MF_MT_DEFAULT_STRIDE, out var st)
-                && (int)st < 0)
-                strideTopDown = -(int)st; // 负 stride = 底朝上，取行时翻转
-
-            var frames = 0;
-            var colorSeq = new System.Text.StringBuilder();
-            string? previous = null;
-            while (frames < 200)
-            {
-                MediaFoundation.Check(MediaFoundation.ReadSample(reader,
-                    MediaFoundation.MF_SOURCE_READER_FIRST_VIDEO_STREAM,
-                    out var flags, out var sample), "ReadSample");
-                if ((flags & MediaFoundation.MF_SOURCE_READERF_ENDOFSTREAM) != 0)
-                    break;
-                if (sample == IntPtr.Zero)
-                    continue;
-                var bytes = MediaFoundation.SampleToBytes(sample);
-                MediaFoundation.Release(ref sample);
-                frames++;
-                var row = MediaFoundation.TryGetU32(current,
-                        MediaFoundation.MF_MT_DEFAULT_STRIDE, out var s2) && (int)s2 < 0
-                    ? h - 1 - y
-                    : y;
-                var offset = row * strideTopDown + x * 4;
-                if (offset + 4 > bytes.Length)
-                    continue;
-                var hex = $"#{bytes[offset + 2]:X2}{bytes[offset + 1]:X2}{bytes[offset]:X2}";
-                if (hex != previous)
-                {
-                    colorSeq.Append(hex).Append(' ');
-                    previous = hex;
-                }
-            }
-            return $"decoded={w}x{h} frames={frames}\n动画点变色序列: {colorSeq}";
-        }
-        finally
-        {
-            MediaFoundation.Release(ref current);
-            MediaFoundation.Release(ref request);
-            MediaFoundation.Release(ref reader);
-            MediaFoundation.Shutdown();
-        }
-    }
 
     /// <summary>
     /// 解析 `--test-record-ui "x,y,w,h[,毫秒[,mp4]]"`：走完整 RecordingController

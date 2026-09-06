@@ -3,7 +3,7 @@
   <!--
     版本号单一事实来源。
     方案（见 docs/TROUBLESHOOTING.md 无关，详见 README「版本号」节）：
-      主.次           = 里程碑，手动维护（0.2=跨屏，…，1.0=需求 v1 全落地）
+      主.次           = 里程碑，手动维护（0.2=跨屏，…，0.19=Linux 移植，1.0=需求 v1 全落地）
       FileVersion     = 主.次.距纪元天数.当日分钟数（自动构建时间戳，
                         每段受 PE 版本资源 16 位约束，此编码精确到分钟且 179 年不回绕）
       AssemblyVersion = 主.次.0.0（保持稳定）
@@ -11,7 +11,7 @@
     升级里程碑：改这里的 VersionPrefix + git tag。
   -->
   <PropertyGroup>
-    <VersionPrefix>0.18</VersionPrefix>
+    <VersionPrefix>0.19</VersionPrefix>
     <BuildEpoch>2026-01-01</BuildEpoch>
   </PropertyGroup>
 

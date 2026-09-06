@@ -216,7 +216,7 @@ public sealed class PinWindow : Window
                 using var ms = new System.IO.MemoryStream();
                 _bitmap.Save(ms);
                 System.IO.File.WriteAllBytes(path,
-                    Zhuoying.Platform.Windows.PngDpiWriter.WithDpi(
+                    Zhuoying.Platform.PngDpiWriter.WithDpi(
                         ms.ToArray(), _sourceDpi, _sourceDpi));
                 NotificationToast.Show($"已保存：{path}");
             }

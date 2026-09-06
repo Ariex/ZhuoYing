@@ -108,11 +108,35 @@ Zhuoying.exe --api-capture "100,100,800,600" --out shot.png   # 区域截图（�
 
 ## 构建与运行
 
+Windows：
+
 ```powershell
 # 依赖：.NET 10 SDK
 dotnet build src\Zhuoying\Zhuoying.csproj
 dotnet run --project src\Zhuoying
 ```
+
+Linux（X11 与 Wayland 均支持，见 `docs/LINUX-PORT.md`）：
+
+```bash
+./build-linux.sh build            # 构建
+./build-linux.sh run -- --api-monitors
+./build-linux.sh publish          # 自包含 linux-x64 → publish/linux-x64（约 105MB）
+./build-linux.sh aot              # NativeAOT → publish/aot-linux（约 46MB，前置 clang + zlib1g-dev）
+./install-linux.sh                # 安装桌面项（全局热键必需，见下）
+```
+
+`build-linux.sh` 已带必需的环境变量。两点 Linux 特有的注意：
+
+- **全局热键必须经 .desktop 启动**。xdg-desktop-portal 的 GlobalShortcuts 要求
+  调用方有 app id，而 app id 是从进程的 systemd scope 名反推的——从终端直接
+  运行的进程没有，portal 会直接拒绝。跑 `install-linux.sh` 后从应用菜单启动
+  （或开启开机自启）即可。
+- **Wayland 首次抓屏会弹一次「共享屏幕」授权框**，点允许后 restore_token 落盘，
+  之后静默恢复（实测二次抓屏 0.23～0.30s）。
+
+可选的运行时依赖：MP4 录制需 `ffmpeg`；Wayland 抓屏需
+`gstreamer1.0-pipewire`；剪贴板需 `wl-clipboard`（Wayland）或 `xclip`（X11）。
 
 ### 发布
 
@@ -128,6 +152,11 @@ dotnet run --project src\Zhuoying
 发布后用 `--test-copy` / `--test-shape` / `--test-line` / `--test-text`
 系列参数对产物做回归。注意 .bat 为 GBK 编码 + CRLF（cmd 对 UTF-8/LF
 中文批处理会解析错位），编辑时保持编码。
+
+Linux 的对应产物由 `./build-linux.sh publish`（自包含，约 105MB）或
+`./build-linux.sh aot`（NativeAOT，exe 32MB + 两个原生库共约 46MB，`.dbg` 不分发）
+生成，回归用同一套 `--test-*` 参数（`--test-dda` 除外，DDA 是 Windows 专属后端）。
+Linux AOT 前置：`clang` + `zlib1g-dev`。
 
 运行后驻留系统托盘，按 `Ctrl+1`（或托盘菜单"截屏"）开始截屏；
 `Esc` / 右键取消。开发自测参数：`--test-capture`（启动 1.5s 后自动触发抓屏）、

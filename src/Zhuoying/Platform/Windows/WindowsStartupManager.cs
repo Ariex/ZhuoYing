@@ -4,12 +4,12 @@ using Microsoft.Win32;
 namespace Zhuoying.Platform.Windows;
 
 /// <summary>开机自启：HKCU\...\Run 键（注册表即持久态，不进 settings.json 避免双源）。</summary>
-public static class StartupManager
+public sealed class WindowsStartupManager : IStartupManager
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ValueName = "Zhuoying";
 
-    public static bool IsEnabled()
+    public bool IsEnabled()
     {
         try
         {
@@ -22,7 +22,7 @@ public static class StartupManager
         }
     }
 
-    public static void SetEnabled(bool enabled)
+    public void SetEnabled(bool enabled)
     {
         try
         {

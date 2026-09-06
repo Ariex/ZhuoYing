@@ -4,13 +4,16 @@
 
 ## 项目概述
 
-**捉影（Zhuoying）**：Windows 桌面截屏标注工具——全局热键呼出 → 冻结虚拟屏幕 → 框选区域 →
+**捉影（Zhuoying）**：跨平台桌面截屏标注工具（Windows / Linux）——全局热键呼出 → 冻结虚拟屏幕 → 框选区域 →
 原位矢量标注（9 种工具）→ 输出（剪贴板 / PNG 文件 / 钉屏贴图 / GIF / MP4 录屏）。
-交互体验对标 Snipaste / 微信截图。当前版本 **0.18**，REQUIREMENTS v1 主体功能已全部落地
-（仅"聚光灯"暂缓），下一大方向是 **Linux 移植**。
+交互体验对标 Snipaste / 微信截图。当前版本 **0.19**，REQUIREMENTS v1 主体功能已全部落地
+（仅"聚光灯"暂缓）。**Windows 与 Linux（X11 + Wayland）双平台**。
 
 - 技术栈：Avalonia 11.3 + .NET 10，NativeAOT 发布（这是硬约束，见下）
 - 混合 DPI 多屏是**一级支持场景**（不是边缘情况），坐标一律以"虚拟屏幕物理像素"为唯一真源
+- 平台实现一律经 `Platform/PlatformServices` 取用；`Platform/Windows` 与
+  `Platform/Linux` 在 csproj 里**互斥编译**（`ZyWindows` 属性），
+  所以 Linux 构建里根本不存在 Registry / Media Foundation / DDA 这些类型
 
 ## 文档地图（决策与需求的权威来源）
 
@@ -18,16 +21,18 @@
 |------|------|----------|
 | `REQUIREMENTS.md` | 需求规格 v1（范围、明确不做的事） | 需求变更时更新 |
 | `TOOLS-SPEC.md` | 每个标注工具的完整行为定义（含"替用户拍板的细节"清单） | 工具行为定稿后回写"已按 X.Y 实现定稿" |
-| `DEVPLAN.md` | 阶段进度（阶段一~十七全勾）+ 每阶段实现要点与验证记录 | 每完成一个阶段追加一节 |
+| `DEVPLAN.md` | 阶段进度（阶段一~十八全勾）+ 每阶段实现要点与验证记录 | 每完成一个阶段追加一节 |
 | `CHANGELOG.md` | 按里程碑的变更记录 | 每个里程碑一节 |
-| `docs/TROUBLESHOOTING.md` | **疑难问题根因记录（§1–§12）**——最有价值的文档，改相关代码前必读 | 新踩的坑（有排查过程、有根因）追加一节 |
+| `docs/TROUBLESHOOTING.md` | **疑难问题根因记录（§1–§17）**——最有价值的文档，改相关代码前必读 | 新踩的坑（有排查过程、有根因）追加一节 |
+| `docs/LINUX-PORT.md` | Linux 移植的环境、设计取舍与逐项验证记录 | 改 Linux 平台层前必读 |
 
 读代码前先读 DEVPLAN 对应阶段一节，实现细节和"为什么这样做"大多写在那里。
 
 ## 协作与工作流约定（用户明确要求）
 
 - **git 提交 / 推送 / 打 tag 全部由用户自己操作，不要代劳**。用户的节奏是：本地多次构建
-  测试，满意后才提交。目前本地 main 与 tag v0.9~v0.18 均未推送远端。
+  测试，满意后才提交。目前本地 main 与 tag v0.9~v0.18 均未推送远端；Linux 移植在分支
+  `feature/ubuntu-migration` 上，同样未提交。
 - 版本号单一来源 `Directory.Build.props`：`主.次`=里程碑（手动改），文件版本三四段=
   构建时间戳（距 2026-01-01 天数.当日分钟，自动）。**不用 git 提交数做版本号**（用户否决过）。
 - 根目录 `.bat` 必须 **GBK 编码 + CRLF**：UTF-8（无论是否 CHCP 65001）或 LF 行尾都会让
@@ -69,12 +74,22 @@ dotnet run --project src\Zhuoying
 ```
 src/Zhuoying/
   Program.cs             入口：--api-*/--test-* 分流在单实例 Mutex 之前；单实例 + 托盘驻留
-  Platform/              平台抽象接口：IHotkeyService / IScreenCapture / IClipboardImage
+  Platform/              平台抽象接口 + PlatformServices（实现的唯一取用口）：
+                         IScreenCapture / IHotkeyService / IClipboardImage /
+                         IStartupManager / IWindowEffects / IFrameSource / IVideoEncoder
+  Platform/Linux/        Linux 实现（两套后端按会话类型分流，见 LinuxServices）：
+                         X11Interop/X11Display/X11ScreenCapture/X11HotkeyService/
+                         X11FrameSource/X11WindowEffects（X11）、
+                         GLibInterop/PortalConnection/PortalScreenCast/
+                         PipeWireFrameReader/WaylandScreenCapture/WaylandFrameSource/
+                         PortalHotkeyService（Wayland，portal + PipeWire）、
+                         LinuxClipboardImage/LinuxStartupManager/Ffmpeg*（共用）
   Platform/Windows/      Windows 实现：Win32.cs（P/Invoke 集中地）、WindowsScreenCapture
                          （DDA 为主 + BitBlt 按矩形回退）、DesktopDuplication（手写 DXGI vtable）、
                          MediaFoundation（手写 MF vtable）、WindowsClipboardImage（纯 Win32
                          CF_DIB）、WindowsHotkeyService（专用消息线程 + RegisterHotKey）、
-                         StartupManager（HKCU Run 键）
+                         WindowsStartupManager（HKCU Run 键）、WindowsFrameSource、
+                         WindowsWindowEffects、MediaFoundationVideoEncoder/Probe
   Capture/               截屏会话：CaptureController（会话生命周期）→ CaptureOverlayWindow
                          （单一遮罩窗口）→ 分层控件；SelectionController（选区状态机）、
                          EditorState（编辑器状态/工具/样式）、EditorToolbar、
@@ -203,57 +218,70 @@ AnnotationElement（Render / HitTest / CaptureState-RestoreState 通用快照）
 - 本机有一个外部输入法/语言栏式白色小悬浮窗（[≡][▭] 两图标，topmost、会自己移动）——
   截图验证时会混进画面，别误判成应用弹层。
 
-## Linux 移植指引（下一大方向）
+## Linux 支持（阶段十八已落地，细节见 docs/LINUX-PORT.md）
 
-### 现状：平台边界在哪里
+同一份 Linux 构建同时伺候 X11 与 Wayland 两种会话，二者的抓屏、帧源、热键是
+**完全不同的两条路**，在 `Platform/Linux/LinuxServices` 按 `XDG_SESSION_TYPE` /
+`WAYLAND_DISPLAY` 分流。
 
-P/Invoke **声明**全部集中在 `Platform/Windows/`（Win32.cs / DesktopDuplication.cs /
-MediaFoundation.cs），但 `Win32.*` 的**调用**有泄漏到上层的点，移植时需先把这些收敛回接口：
+| 能力 | X11 | Wayland |
+|------|-----|---------|
+| 抓屏 | XGetImage | xdg-desktop-portal ScreenCast + PipeWire（gst-launch 管道） |
+| 全局热键 | XGrabKey 专用线程 | portal GlobalShortcuts |
+| 录屏帧源 | XGetImage + XFixes 光标 | 复用同一 portal 会话，光标由合成器合成 |
+| 窗口枚举 | EWMH `_NET_CLIENT_LIST_STACKING` | **不可能**，合成器不暴露；窗口吸附降级 |
+| 点击穿透 | XShape 空输入区 | — |
+| 排除录制自身 | **无等价物**（见下） | 无等价物 |
 
-| 泄漏点 | Windows 依赖 | 说明 |
-|--------|--------------|------|
-| `Capture/RegionFrameSource.cs` | BitBlt + DrawIconEx 光标补绘 | 录屏帧源，GIF/MP4 共用；需抽 IFrameSource |
-| `Capture/RecordingController.cs` | WDA_EXCLUDEFROMCAPTURE、WS_EX_TRANSPARENT | 录制红框/控制条不入镜 + 点击穿透 |
-| `Capture/GifRecorder.cs` | （经 RegionFrameSource） | 编码器本身纯托管 |
-| `Capture/Mp4Recorder.cs` | Media Foundation SinkWriter | Linux 需换编码方案 |
-| `App.axaml.cs` | 少量 Win32 调用 | 移植时逐个核对 |
-| `Agent/AgentCli.cs` | AttachConsole | WinExe 无控制台的补偿，Linux 不需要 |
-| `Platform/Windows/StartupManager.cs` | HKCU Run 注册表键 | Linux → XDG autostart .desktop |
+共用：剪贴板 wl-copy/xclip（PNG + pHYs）、XDG autostart、MP4 走 ffmpeg 子进程。
 
-**纯托管、可直接复用**：`Annotations/` 全部（矢量模型与渲染，注意零重叠原则依赖的是
-Avalonia 行为，跨平台一致）、`GifWriter`、`MiniPng`、`McpServer/McpHttpServer`（TcpListener
-跨平台）、`Settings/`（除 StartupManager；路径 `%AppData%\Zhuoying` 需换
-`XDG_CONFIG_HOME`）、`StampLibrary/StampRasterizer`（Svg.Skia/SkiaSharp 跨平台）、
-工具栏与编辑器 UI 层。
+### 改 Linux 代码前必须知道的几条
 
-### 需要 Linux 等价物的能力清单
+1. **Wayland 首次抓屏要用户授权一次**，`persist_mode=2` 拿 restore_token 存
+   `~/.config/Zhuoying/wayland-restore-token`，之后静默（0.23~0.30s）。
+   绝不能改用 `portal.Screenshot`——它每次都弹框，且未决请求会把整个 portal 卡死。
+2. **Wayland 全局热键要求 app id**，portal 从 systemd scope 名反推，
+   所以必须经 .desktop / `systemd-run --user --scope --unit=app-zhuoying-N` 启动；
+   从终端直接跑必然注册失败。`install-linux.sh` 装桌面项。
+3. **portal 的 Request 模式必须先订阅信号再发起调用**，顺序颠倒会漏掉快速返回的响应。
+4. **PipeWire 与 DDA 的首帧直觉相反**：DDA 首帧可能未播种要丢弃（§12），
+   PipeWire 则是流建立时就推一帧、之后只在画面变化时才推——多要一帧就是无限期干等。
+   且 `fdsink` 必须 `sync=false`，否则首帧要等十几秒到一分钟（§17）。
+5. **X11 路径在 Wayland 会话下会 `BadMatch`**，而 Xlib 默认错误处理器直接 `exit()`；
+   `X11Display` 已装进程级错误处理器兜底，新增 X 调用别绕过它。
+6. **录制控件不入镜**：Linux 无 `WDA_EXCLUDEFROMCAPTURE` 等价物
+   （`IWindowEffects.SupportsCaptureExclusion` 为 false），红框改用四条实心边条贴
+   区域外沿（也顺带摆脱了对合成器透明的依赖），控制条只停区域外、放不下则隐藏。
+7. **`Process.Kill(entireProcessTree: true)` 在 Linux 上很慢**（扫 /proc 重建进程树，
+   实测抖动到 2 秒）；一次性子进程用无参 `Kill()`。
 
-| 能力 | Windows 实现 | Linux 注意点 |
-|------|--------------|--------------|
-| 抓屏 | DDA + BitBlt 回退 | X11（XShm/XGetImage）与 Wayland（xdg-desktop-portal + PipeWire，需用户授权）路径完全不同；Wayland 无全局坐标概念 |
-| 全局热键 | RegisterHotKey 专用消息线程 | X11 XGrabKey；Wayland 无全局热键协议（需 portal GlobalShortcuts 或桌面环境特定方案） |
-| 剪贴板图片 | 纯 Win32 CF_DIB + DPI 头 | X11/Wayland 走 image/png MIME；"只写 CF_DIB"决策是 Win11 画图特有坑，Linux 不适用，但 DPI 元数据策略需重新验证目标应用 |
-| 托盘 | Avalonia TrayIcon | Linux 走 StatusNotifierItem/AppIndicator，桌面环境差异大 |
-| 录屏排除自身 | WDA_EXCLUDEFROMCAPTURE | 无直接等价物；portal 捕获可选择性共享 |
-| 点击穿透窗口 | WS_EX_TRANSPARENT | X11 shape input region；Wayland input region |
-| 置顶贴图 | Avalonia Topmost | Wayland 下 Topmost 不可靠（layer-shell 需扩展协议） |
-| MP4 编码 | Media Foundation | 候选：ffmpeg 调用、VAAPI、或纯托管编码器；GIF 路径纯托管可直接用 |
-| 开机自启 | HKCU Run | XDG autostart |
-| 单实例 | 命名 Mutex | 命名 Mutex 在 Linux 上 .NET 有实现差异，需验证或换 socket/文件锁 |
+### Linux 发布
 
-### 移植策略建议
+`./build-linux.sh publish` 自包含约 105MB；`./build-linux.sh aot` NativeAOT
+（前置 `clang` + `zlib1g-dev`）产出 exe 32MB + libSkiaSharp/libHarfBuzzSharp 共约 46MB
+（`.dbg` 77MB 不分发）。**AOT 已全项回归通过**：X11 与 Wayland 两条路的抓屏/录屏/
+剪贴板/热键，以及裁剪风险最高的 SVG 光栅化（图章差异 1162 像素，与 JIT 版逐值一致）。
+唯一警告仍是已知无害的 Svg.Model IL2104。
 
-1. 先做接口收敛重构（把上表泄漏点抽回 `Platform/` 接口），Windows 行为不变、AOT 回归通过，
-   作为独立里程碑；
-2. X11 先行（能力完整、可自动化测试），Wayland 的 portal 授权流程与全局热键限制单独评估；
-3. 混合 DPI 模型不同：Linux/X11 多为统一缩放，Wayland 每输出缩放但坐标模型与 Windows
-   虚拟屏不同——"虚拟屏物理像素为唯一真源"的坐标系假设需重新审视；
-4. Avalonia 陷阱一节（Measure 时序、Popup、命中测试等）是跨平台的，照常遵守；
-   §7/§8/§10 的跨 DPI 移屏分裂是否在 Linux 复现未知，单窗口架构本身建议保留。
+### 本机 Linux 开发环境
+
+Ubuntu 26.04 + GNOME 50 on **Wayland**（经 NoMachine 远程桌面），单屏 1920×1080
+96 DPI 无缩放。**混合 DPI 回归只能在 Windows 侧做**。两个必踩的环境坑：
+`dotnet restore` 因 IPv6 黑洞挂死（§13，`build-linux.sh` 已带
+`DOTNET_SYSTEM_NET_DISABLEIPV6=1`）、libSkiaSharp native 版本冲突（§14）。
+snap 版 dotnet 需 `DOTNET_ROOT=/var/snap/dotnet/common/dotnet` 才能直接跑产物。
+
+X11 路径的自动化验证在 **Xvfb** 里做（真实桌面是 Wayland，X11 抓屏只看得到
+X 客户端）：测试内容必须用常驻真实窗口（`xlogo` 之类），不能用
+`xsetroot`/`display -window root` 铺背景——那是 root 背景 pixmap，设置它的进程
+一退出就被释放，抓出来全黑（§15）。对照基准用 `ffmpeg -f x11grab`。
 
 ## 剩余工作（v1.0 前）
 
 - 聚光灯工具（暂缓中，采样取反基建已具备）
+- Linux 收尾：Wayland 抓屏目前 `multiple:false` **只取一路流（单屏）**，多屏需改
+  多流合并；X11 的 EWMH 窗口枚举**未在带窗管的环境验证过**（Xvfb 无窗管，
+  `_NET_CLIENT_LIST_STACKING` 不存在，测出来恒为空；用户已确认此功能可有可无）
 - 录屏增强：帧源升级 DDA 持久会话或 WGC；帧率/含光标做成设置项；录音并入 MP4
 - MCP 扩展工具：pin_image（需与托盘实例 IPC）、record_gif/mp4
 - 升 1.0 由用户拍板

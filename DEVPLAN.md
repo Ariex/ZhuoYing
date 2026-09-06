@@ -256,6 +256,68 @@
 - [x] 验证：常驻实例 initialize/tools/list/get_monitors/take_screenshot 全链路
   （base64 PNG 合法）；默认关不监听；AOT 回归
 
+## 阶段十八：Linux 移植 ✅（2026-09-06 完成，里程碑 0.19）
+
+分支 `feature/ubuntu-migration`。目标：REQUIREMENTS v1 的功能在 Linux 下全部可用。
+详细的环境、设计取舍与逐项验证记录见 `docs/LINUX-PORT.md`。
+
+### 实现要点
+
+**平台边界收敛**（先做的独立重构，Windows 行为逐字未变）：上层不再直接引用
+`Platform.Windows`，一律经新增的 `Platform/PlatformServices` 取服务。新增四个接口
+`IStartupManager` / `IWindowEffects` / `IFrameSource` / `IVideoEncoder`，
+`PngDpiWriter` 移出 Windows 目录，`Mp4Recorder` 拆成纯托管驱动循环 + 平台编码器。
+csproj 按 `ZyWindows` 属性让 `Platform/Windows` 与 `Platform/Linux` **互斥编译**——
+Linux 构建里根本不存在 Registry / Media Foundation / Desktop Duplication 这些类型。
+
+**两套 Linux 后端**，按会话类型在 `LinuxServices` 分流：
+
+- **X11**：`X11ScreenCapture`（XGetImage）、`X11HotkeyService`（XGrabKey 专用线程）、
+  `X11FrameSource`（+ XFixes 光标）、`X11WindowEffects`（XShape 输入穿透）；
+- **Wayland**：`WaylandScreenCapture` = xdg-desktop-portal ScreenCast + PipeWire
+  （`PortalConnection` 手写 GDBus 互操作 + `PipeWireFrameReader` 走 gst-launch 管道）、
+  `PortalHotkeyService`（portal GlobalShortcuts）、`WaylandFrameSource`（复用同一会话）。
+
+共用：`LinuxClipboardImage`（wl-copy / xclip，PNG + pHYs）、
+`LinuxStartupManager`（XDG autostart）、`FfmpegVideoEncoder` / `FfmpegVideoProbe`。
+
+### 验证记录
+
+X11 侧在 Xvfb 1920×1080 上逐项实测：抓屏与 `ffmpeg x11grab` **逐字节一致**
+（120000 像素零差异）；全局热键注入 Ctrl+2 遮罩如期弹出；剪贴板 PNG 与直抓逐字节
+一致、pHYs 96 DPI 正确；9 种标注工具输出合成全部验证（中文渲染、SVG 图章、
+区域模糊边界"区内 34% 改变、区外 0 差异"、橡皮擦除生效）；GIF/MP4 录屏、
+完整录制 UI 流程、设置窗口（含真实鼠标点击，覆盖输入命中）、开机自启、
+Agent API、MCP（截图与直抓逐字节一致、恶意 Origin 403）。
+
+Wayland 侧在 GNOME 50 / Ubuntu 26.04 实测：抓屏首次 22s（含人工授权）、
+**之后 0.23～0.30s 静默**（restore_token 持久化）；GIF 28 帧 / MP4 31 帧；
+剪贴板走 wl-copy；全局热键经 GlobalShortcuts 绑定成功并写入 dconf、按键触发正常。
+自包含发布产物（105MB）全项回归通过。
+
+**NativeAOT 在 Linux 上同样通过**（`./build-linux.sh aot`，前置 clang + zlib1g-dev）：
+exe 32MB + 两个原生库共约 46MB。15 项回归全绿，覆盖 X11 与 Wayland 两条路的
+抓屏/标注/剪贴板/录屏/热键/设置窗口，以及裁剪风险最高的 SVG 光栅化——
+图章差异 1162 像素，与 JIT 版**逐值一致**。手写的 GDBus/X11 P/Invoke 与
+`UnmanagedCallersOnly` 回调（X 错误处理器、portal 信号、热键）在 AOT 下均正常。
+
+### 三个平台无关的真 bug（Windows 同样中招，已修）
+
+1. **GIF 的 LZW 码宽提前一个码切换**（TROUBLESHOOTING §16）——整帧数据流损坏，
+   但 ffmpeg/浏览器容错照常显示，靠帧间差分让小帧躲过升位点，一直没被发现；
+2. **`--test-mp4` 采样点按 200% 缩放硬编码**，在无缩放显示器上落到窗外；
+3. **录制红框依赖合成器透明**，无合成器环境下透明失效、白色实心块盖死录制区。
+
+### 已知平台差异
+
+- X11/Wayland 都**没有** `WDA_EXCLUDEFROMCAPTURE` 等价物：红框改用四条实心边条
+  贴外沿，控制条只停区域外、放不下则隐藏（用户拍板"临时隐藏"）；
+- **Wayland 无法枚举其他应用窗口**，选区的窗口吸附自然降级（用户已确认接受）；
+- **Wayland 全局热键要求 app id**，必须经 .desktop / systemd scope 启动
+  （为此加了 `install-linux.sh`）；
+- X11 路径在 Wayland 会话下调 XGetImage 会 `BadMatch`，而 Xlib 默认错误处理器
+  直接 `exit()`——已在 `X11Display` 装进程级错误处理器兜底。
+
 ## 后续阶段（概要）
 
 - REQUIREMENTS v1 主体功能已全部落地（仅聚光灯暂缓），收尾后可升 1.0

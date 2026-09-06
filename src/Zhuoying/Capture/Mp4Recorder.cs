@@ -3,30 +3,32 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using Avalonia;
-using Zhuoying.Platform.Windows;
+using Zhuoying.Platform;
 
 namespace Zhuoying.Capture;
 
 /// <summary>
-/// MP4 (H.264) 录屏：Media Foundation SinkWriter，输入 RGB32 帧，颜色转换与
-/// 编码器（优先硬件）由 SinkWriter 自动插入，WriteSample 内部异步不阻塞采样。
+/// MP4 (H.264) 录屏：固定帧率采样 + 平台视频编码器（<see cref="IVideoEncoder"/>）。
 /// 单线程即可（对比 GifRecorder 无需相同帧合并——编码器对静止画面近零码率）；
 /// 时间戳用真实流逝时间，回放忠于实际。
+///
+/// 本类自身纯托管：编码走 Windows 的 Media Foundation 或 Linux 的 ffmpeg，
+/// 帧源走 X11/GDI，两者都由 PlatformServices 选定。
 /// </summary>
 internal sealed class Mp4Recorder : IScreenRecorder
 {
-    /// <summary>Windows 自带 H.264 编码器的分辨率上限（Level 5.2）。</summary>
-    public const int MaxWidth = 4096;
-    public const int MaxHeight = 2304;
+    /// <summary>平台 H.264 编码器的分辨率上限。</summary>
+    public static int MaxWidth => PlatformServices.VideoLimits.MaxWidth;
+    public static int MaxHeight => PlatformServices.VideoLimits.MaxHeight;
 
     private readonly PixelRect _region;
     private readonly int _fps;
     private readonly string _path;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly Thread _thread;
-    private IntPtr _writer;
-    private readonly uint _stream;
+    private readonly IVideoEncoder _encoder;
     private volatile bool _stopping;
+    private bool _stopped;
     private int _frameCount;
 
     /// <summary>H.264 要求偶数边长：区域宽高向下取偶（至多牺牲 1px）。</summary>
@@ -42,48 +44,8 @@ internal sealed class Mp4Recorder : IScreenRecorder
         _fps = Math.Clamp(fps, 1, 60);
         _path = path;
 
-        MediaFoundation.Startup(); // Windows N 无媒体功能包时在此失败
-        var attrs = IntPtr.Zero;
-        var outType = IntPtr.Zero;
-        var inType = IntPtr.Zero;
-        try
-        {
-            MediaFoundation.Check(
-                MediaFoundation.MFCreateAttributes(out attrs, 1), "MFCreateAttributes");
-            MediaFoundation.SetU32(attrs,
-                MediaFoundation.MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1);
-            MediaFoundation.Check(
-                MediaFoundation.MFCreateSinkWriterFromURL(path, IntPtr.Zero, attrs, out _writer),
-                "MFCreateSinkWriterFromURL");
-
-            outType = MediaFoundation.CreateVideoType(
-                MediaFoundation.MFVideoFormat_H264, _region.Width, _region.Height, _fps);
-            // 码率经验值：0.1 bpp × 像素率，钳位 1–25 Mbps（屏幕内容足够清晰）
-            var bitrate = (uint)Math.Clamp(
-                (long)(_region.Width * (double)_region.Height * _fps * 0.1), 1_000_000, 25_000_000);
-            MediaFoundation.SetU32(outType, MediaFoundation.MF_MT_AVG_BITRATE, bitrate);
-            _stream = MediaFoundation.AddStream(_writer, outType);
-
-            inType = MediaFoundation.CreateVideoType(
-                MediaFoundation.MFVideoFormat_RGB32, _region.Width, _region.Height, _fps);
-            // 正 stride = 顶朝下（RGB 默认底朝上，不声明会整帧垂直翻转）
-            MediaFoundation.SetU32(inType,
-                MediaFoundation.MF_MT_DEFAULT_STRIDE, (uint)(_region.Width * 4));
-            MediaFoundation.SetInputMediaType(_writer, _stream, inType);
-            MediaFoundation.BeginWriting(_writer);
-        }
-        catch
-        {
-            MediaFoundation.Release(ref _writer);
-            MediaFoundation.Shutdown();
-            throw;
-        }
-        finally
-        {
-            MediaFoundation.Release(ref attrs);
-            MediaFoundation.Release(ref outType);
-            MediaFoundation.Release(ref inType);
-        }
+        // 编码器创建失败（Windows N 缺媒体功能包 / Linux 缺 ffmpeg）直接抛给调用方
+        _encoder = PlatformServices.CreateVideoEncoder(_region, _fps, path);
 
         _thread = new Thread(CaptureLoop) { IsBackground = true, Name = "mp4-capture" };
         _thread.Start();
@@ -110,22 +72,13 @@ internal sealed class Mp4Recorder : IScreenRecorder
 
     public void Stop()
     {
-        if (_stopping)
+        if (_stopped)
             return;
+        _stopped = true;
         _stopping = true;
         _thread.Join();
-        if (_writer != IntPtr.Zero)
-        {
-            try
-            {
-                MediaFoundation.FinalizeWriter(_writer);
-            }
-            finally
-            {
-                MediaFoundation.Release(ref _writer);
-                MediaFoundation.Shutdown();
-            }
-        }
+        _encoder.Finish();
+        _encoder.Dispose();
     }
 
     public void Cancel()
@@ -144,9 +97,8 @@ internal sealed class Mp4Recorder : IScreenRecorder
 
     private void CaptureLoop()
     {
-        using var source = new RegionFrameSource(_region);
+        using var source = PlatformServices.CreateFrameSource(_region);
         var intervalMs = 1000.0 / _fps;
-        var durationNs100 = 10_000_000L / _fps;
         var tick = 0L;
         while (!_stopping)
         {
@@ -160,22 +112,15 @@ internal sealed class Mp4Recorder : IScreenRecorder
 
             if (!source.Capture())
                 continue;
-            var sample = MediaFoundation.CreateFrameSample(
-                source.Bits, source.ByteLength,
-                _clock.ElapsedMilliseconds * 10_000, durationNs100);
             try
             {
-                MediaFoundation.WriteSample(_writer, _stream, sample);
+                _encoder.WriteFrame(source.Bits, source.ByteLength, _clock.ElapsedMilliseconds);
                 _frameCount++;
             }
             catch (InvalidOperationException)
             {
-                // 编码失败（磁盘满/设备丢失）：停止采样，Stop 时 Finalize 尽力收尾
+                // 编码失败（磁盘满/设备丢失）：停止采样，Stop 时尽力收尾
                 _stopping = true;
-            }
-            finally
-            {
-                MediaFoundation.Release(ref sample);
             }
         }
     }

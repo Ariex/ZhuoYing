@@ -1,14 +1,13 @@
 using System;
 using Avalonia;
-using Zhuoying.Platform.Windows;
 
-namespace Zhuoying.Capture;
+namespace Zhuoying.Platform.Windows;
 
 /// <summary>
-/// 录屏共享帧源：固定区域的 BitBlt 采样 + 光标补绘（GIF 与 MP4 录制共用）。
+/// 录屏帧源的 Windows 实现：固定区域 BitBlt 采样 + DrawIconEx 光标补绘。
 /// DIB 复用整个录制生命周期；Bits 指向 top-down BGRA。
 /// </summary>
-internal sealed class RegionFrameSource : IDisposable
+public sealed class WindowsFrameSource : IFrameSource
 {
     private readonly PixelRect _region;
     private readonly IntPtr _screenDc;
@@ -20,7 +19,7 @@ internal sealed class RegionFrameSource : IDisposable
 
     public int ByteLength => _region.Width * _region.Height * 4;
 
-    public RegionFrameSource(PixelRect region)
+    public WindowsFrameSource(PixelRect region)
     {
         _region = region;
         _screenDc = Win32.GetDC(IntPtr.Zero);
@@ -82,18 +81,4 @@ internal sealed class RegionFrameSource : IDisposable
         Win32.DeleteDC(_memDc);
         Win32.ReleaseDC(IntPtr.Zero, _screenDc);
     }
-}
-
-/// <summary>录屏器统一接口（GIF / MP4）。</summary>
-internal interface IScreenRecorder : IDisposable
-{
-    TimeSpan Elapsed { get; }
-    long BytesWritten { get; }
-    int FrameCount { get; }
-
-    /// <summary>结束录制并完成文件（阻塞至编码收尾）。</summary>
-    void Stop();
-
-    /// <summary>取消录制并删除文件。</summary>
-    void Cancel();
 }

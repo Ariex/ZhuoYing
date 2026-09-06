@@ -26,8 +26,19 @@ public interface IScreenCapture
     WriteableBitmap CaptureRegion(PixelRect physicalRegion);
 
     /// <summary>
+    /// 抓取区域直写调用方缓冲（top-down BGRA，dst 指向 region 左上角像素）。
+    /// 与 <see cref="CaptureRegion"/> 同一条抓屏管线，只是省掉 WriteableBitmap——
+    /// 供 Agent API / MCP 这类"抓完立刻编码 PNG"的路径使用。
+    /// </summary>
+    unsafe void CaptureInto(PixelRect region, byte* dst, int dstStride);
+
+    /// <summary>
     /// 当前可见顶层窗口矩形快照（自顶向下 Z 序，物理像素，已去阴影/已过滤
     /// 最小化与隐身窗口）。抓屏瞬间调用，供选区的"窗口吸附"检测。
     /// </summary>
     IReadOnlyList<PixelRect> GetVisibleWindowRects();
+
+    /// <summary>带标题的可见顶层窗口快照（Agent API / MCP 用，
+    /// 过滤与 Z 序规则同 <see cref="GetVisibleWindowRects"/>）。</summary>
+    IReadOnlyList<(string Title, PixelRect Rect)> GetVisibleWindowsWithTitles();
 }
