@@ -139,7 +139,8 @@ public sealed class SettingsWindow : Window
         // 保存目录：文本框 + 浏览按钮（留空 = 默认"图片\捉影"）
         _savePathBox = new TextBox
         {
-            Watermark = "留空 = 图片\\捉影",
+            // 路径分隔符随平台：Windows 显示「图片\捉影」，Linux 显示「图片/捉影」
+            Watermark = $"留空 = 图片{System.IO.Path.DirectorySeparatorChar}捉影",
             Text = savePath,
             FontSize = 12,
         };
@@ -163,7 +164,7 @@ public sealed class SettingsWindow : Window
         _startupCheck = new CheckBox
         {
             Content = "开机自动启动",
-            IsChecked = Zhuoying.Platform.Windows.StartupManager.IsEnabled(),
+            IsChecked = Zhuoying.Platform.PlatformServices.Startup.IsEnabled(),
         };
 
         // Agent API：屏幕内容外读能力，默认关（REQUIREMENTS 安全边界：只"看"不"动"）
@@ -272,7 +273,7 @@ public sealed class SettingsWindow : Window
             _tryApply(_original);
             return;
         }
-        Zhuoying.Platform.Windows.StartupManager.SetEnabled(_startupCheck.IsChecked == true);
+        Zhuoying.Platform.PlatformServices.Startup.SetEnabled(_startupCheck.IsChecked == true);
         _save(candidate, colors, _savePathBox.Text?.Trim() ?? "",
             _agentApiCheck.IsChecked == true, _mcpCheck.IsChecked == true);
         Close();

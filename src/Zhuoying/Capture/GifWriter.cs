@@ -212,8 +212,16 @@ internal sealed class GifWriter : IDisposable
             if (nextCode < 4096)
             {
                 dict[key] = nextCode++;
-                // 解码器在表长到达 2^codeSize 时升位宽，编码器同步
-                if (nextCode == 1 << codeSize && codeSize < 12)
+                // 升位宽要比"表长到达 2^codeSize"晚一个码：编码器每输出一个码就
+                // 建一条新表项，而解码器读到的第一个数据码建不了表项（它还没有
+                // 前缀），此后恒比编码器少一条。若按 nextCode == 2^codeSize 升位，
+                // 编码器会提前一个码切到新位宽，解码器仍按旧位宽读 —— 从此整条
+                // 码流比特错位，解出天文数字的非法码。
+                // 症状极具迷惑性：小帧（差分帧只有几十个码）根本到不了 512 这个
+                // 升位点，一路正常；只有数据量大的整帧才炸，且 ffmpeg/浏览器对
+                // LZW 错误容错、照样显示，肉眼看不出来（Pillow 会如实报
+                // "broken data stream"）。详见 docs/TROUBLESHOOTING.md §16。
+                if (nextCode == (1 << codeSize) + 1 && codeSize < 12)
                     codeSize++;
             }
             else

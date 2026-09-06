@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using Avalonia;
-using Zhuoying.Platform.Windows;
+using Zhuoying.Platform;
 
 namespace Zhuoying.Agent;
 
@@ -197,14 +197,14 @@ internal static class McpProtocol
             if (args.TryGetProperty("window_title", out var t)
                 && t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 } title)
             {
-                foreach (var (winTitle, rect) in WindowsScreenCapture.GetVisibleWindowsWithTitles())
+                foreach (var (winTitle, rect) in PlatformServices.ScreenCapture.GetVisibleWindowsWithTitles())
                     if (winTitle.Contains(title, StringComparison.OrdinalIgnoreCase))
                         return Clamp(rect, AgentCli.VirtualScreen());
                 throw new ArgumentException($"没有标题含 \"{title}\" 的可见窗口");
             }
             if (args.TryGetProperty("monitor", out var m) && m.ValueKind == JsonValueKind.Number)
             {
-                var monitors = new WindowsScreenCapture().GetAllMonitors();
+                var monitors = PlatformServices.ScreenCapture.GetAllMonitors();
                 var index = m.GetInt32();
                 if (index < 0 || index >= monitors.Count)
                     throw new ArgumentException($"显示器序号 {index} 超界（共 {monitors.Count} 台）");

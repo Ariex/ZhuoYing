@@ -1,18 +1,51 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <AssemblyName>Zhuoying</AssemblyName>
     <RootNamespace>Zhuoying</RootNamespace>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+
+  <!--
+    目标平台判定（Linux 移植，DEVPLAN 阶段十八）：
+      显式 RuntimeIdentifier 优先（发布场景），否则按构建机 OS。
+    两平台的 Platform/Windows 与 Platform/Linux 互斥编译，上层一律经
+    Platform/PlatformServices 取服务，见 CLAUDE.md「架构」。
+  -->
+  <PropertyGroup>
+    <ZyWindows>false</ZyWindows>
+    <ZyWindows Condition="'$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT'">true</ZyWindows>
+    <ZyWindows Condition="'$(RuntimeIdentifier)' != '' and $(RuntimeIdentifier.StartsWith('win'))">true</ZyWindows>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(ZyWindows)' == 'true'">
+    <!-- WinExe：无控制台窗口（Agent CLI 用 AttachConsole 补偿） -->
+    <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <DefineConstants>$(DefineConstants);ZY_WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(ZyWindows)' != 'true'">
+    <!-- Linux 无 WinExe 概念；控制台输出天然可用，Agent CLI 无需补偿 -->
+    <OutputType>Exe</OutputType>
+    <DefineConstants>$(DefineConstants);ZY_LINUX</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(ZyWindows)' == 'true'">
+    <Compile Remove="Platform\Linux\**\*.cs" />
+    <None Include="Platform\Linux\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(ZyWindows)' != 'true'">
+    <Compile Remove="Platform\Windows\**\*.cs" />
+    <None Include="Platform\Windows\**\*.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
@@ -25,6 +58,18 @@
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.18" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.3.18" Condition="'$(Configuration)' == 'Debug'" />
     <PackageReference Include="Svg.Skia" Version="5.1.1" />
+  </ItemGroup>
+
+  <!--
+    Linux native Skia 版本钉死（Linux 移植，docs/TROUBLESHOOTING.md §14）：
+    传递依赖会把 SkiaSharp.NativeAssets.Linux 解析成 2.88.9，而托管
+    SkiaSharp 是 3.119.2 —— 启动即抛
+    "native libSkiaSharp library (88.1) is incompatible ... [119.0, 120.0)"。
+    Win32/macOS 的 NativeAssets 都被正确带到 3.119.2，唯独 Linux 那个没有，
+    所以这个坑在 Windows 上永远不会暴露。
+  -->
+  <ItemGroup Condition="'$(ZyWindows)' != 'true'">
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.2" />
   </ItemGroup>
 
 </Project>

@@ -373,7 +373,7 @@ public sealed class CaptureSession
             using var ms = new System.IO.MemoryStream();
             output.Save(ms);
             System.IO.File.WriteAllBytes(path,
-                Zhuoying.Platform.Windows.PngDpiWriter.WithDpi(ms.ToArray(), dpi, dpi));
+                Zhuoying.Platform.PngDpiWriter.WithDpi(ms.ToArray(), dpi, dpi));
         }
         finally
         {

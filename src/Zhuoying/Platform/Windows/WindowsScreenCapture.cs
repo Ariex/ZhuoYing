@@ -40,8 +40,7 @@ public sealed class WindowsScreenCapture : IScreenCapture
         return list;
     }
 
-    /// <summary>带标题的可见窗口快照（Agent API 用，过滤规则同 GetVisibleWindowRects）。</summary>
-    internal static List<(string Title, PixelRect Rect)> GetVisibleWindowsWithTitles()
+    public IReadOnlyList<(string Title, PixelRect Rect)> GetVisibleWindowsWithTitles()
     {
         var buffer = new char[512];
         var list = new List<(string, PixelRect)>();
@@ -117,8 +116,13 @@ public sealed class WindowsScreenCapture : IScreenCapture
         var bitmap = new WriteableBitmap(
             new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
         using var fb = bitmap.Lock();
-        var dst = (byte*)fb.Address;
+        CaptureInto(region, (byte*)fb.Address, fb.RowBytes);
+        return bitmap;
+    }
 
+    /// <summary>抓取区域直写调用方缓冲（DDA 优先 + BitBlt 回退，同产线管线）。</summary>
+    public unsafe void CaptureInto(PixelRect region, byte* dst, int dstStride)
+    {
         // DDA 优先（独占全屏/MPO/HDR 正确），任何层面失败回退 BitBlt：
         // 设备级异常 → 重建实例并整块回退；单输出失败/未覆盖区域 → 按矩形回退
         List<PixelRect> pending;
@@ -126,7 +130,7 @@ public sealed class WindowsScreenCapture : IScreenCapture
         {
             try
             {
-                pending = DesktopDuplicator.Shared.CaptureInto(region, dst, fb.RowBytes);
+                pending = DesktopDuplicator.Shared.CaptureInto(region, dst, dstStride);
             }
             catch
             {
@@ -138,9 +142,8 @@ public sealed class WindowsScreenCapture : IScreenCapture
             : pending.Count == 1 && pending[0] == region ? "bitblt"
             : $"dda+bitblt({pending.Count})";
         foreach (var r in pending)
-            BitBltInto(r, dst + (long)(r.Y - region.Y) * fb.RowBytes + (long)(r.X - region.X) * 4,
-                fb.RowBytes);
-        return bitmap;
+            BitBltInto(r, dst + (long)(r.Y - region.Y) * dstStride + (long)(r.X - region.X) * 4,
+                dstStride);
     }
 
     /// <summary>强制纯 BitBlt 抓取（DDA 像素一致性自测用，产线走 CaptureRegion）。</summary>

@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using Avalonia;
-using Zhuoying.Platform.Windows;
+using Zhuoying.Platform;
 
 namespace Zhuoying.Capture;
 
@@ -91,7 +91,7 @@ internal sealed unsafe class GifRecorder : IScreenRecorder
     private void CaptureLoop()
     {
         int w = _region.Width, h = _region.Height;
-        using var source = new RegionFrameSource(_region);
+        using var source = PlatformServices.CreateFrameSource(_region);
         var intervalMs = 1000.0 / _fps;
         var tick = 0L;
         while (!_stopping)

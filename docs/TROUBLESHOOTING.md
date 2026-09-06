@@ -245,3 +245,147 @@ BitBlt，测不到 DDA 路径本身——测试钩子每屏放一个 8×8 闪烁
 并设 `WDA_EXCLUDEFROMCAPTURE`（DDA 与 BitBlt 两路都不可见，不污染 diff）。
 另外屏幕自身可能存在低幅动态内容（本机实测 GDI 自身相隔 130ms 双抓
 diff≈2900 像素、幅度 ±1~3），两路抓取非同瞬，diff 达到该本底即视为一致。
+
+## 13. Linux 开发机上 `dotnet restore` 无限挂起（IPv6 黑洞）
+
+**现象**：`dotnet restore` / `dotnet build` 停在 `Determining projects to restore...`
+不动，无报错、无超时，`~/.nuget/packages` 一个包都没下来。进程 0.4% CPU、S 状态，
+一直在等网络。同时 `curl https://api.nuget.org/v3/index.json` 秒回 200，
+下载 13MB 的 .nupkg 只要 3.3 秒（3.9MB/s）——"网络明明是好的"。
+
+**根因**：开发机有全局 IPv6 地址和默认路由，但 IPv6 出网是**黑洞**
+（丢包而非 REJECT，所以是超时而不是立即失败）。`api.nuget.org` 的 DNS
+同时返回 A 和 AAAA 记录：`curl` 有 Happy Eyeballs，几百毫秒就回退到 IPv4；
+.NET 的 HttpClient 不做这个回退，于是一直挂在 IPv6 连接上。
+
+诊断命令（关键是分别测两个协议族，别只测"能不能上网"）：
+
+```bash
+curl -4 -sS -o /dev/null -w "IPv4: %{http_code} %{time_total}s\n" https://api.nuget.org/v3/index.json
+curl -6 -sS -o /dev/null -w "IPv6: %{http_code} %{time_total}s\n" https://api.nuget.org/v3/index.json
+```
+
+**解决方案**：`export DOTNET_SYSTEM_NET_DISABLEIPV6=1`。实测 restore 从
+无限挂起变成 2.4 秒。已固化进根目录 `build-linux.sh`，手工敲 dotnet 命令时
+也要记得带上。
+
+**排查陷阱**：极易误判成 snap 版 dotnet 的沙箱问题或 NuGet 源配置问题。
+判据是**最小项目能否 restore**：无 PackageReference 的空项目 3.6 秒就 build 完
+（根本不联网），一加 `<PackageReference Include="Avalonia" />` 就挂——
+问题在网络栈，不在 dotnet 安装。
+
+## 14. Linux 上启动即崩：libSkiaSharp 版本不兼容
+
+**现象**：Linux 下应用一启动就 abort（core dumped）：
+
+```
+The version of the native libSkiaSharp library (88.1) is incompatible with
+this version of SkiaSharp. Supported versions are in the range [119.0, 120.0).
+```
+
+栈顶是 `Avalonia.Skia.SkiaPlatform.Initialize` → `SKFontManager.get_Default`，
+即 Avalonia 初始化字体管理器的第一步。Windows 上同一份代码从无此问题。
+
+**根因**：NuGet 传递依赖把 `SkiaSharp.NativeAssets.Linux` 解析成了 **2.88.9**，
+而托管 `SkiaSharp` 是 **3.119.2**。查依赖树可见 Win32 与 macOS 的 NativeAssets
+都被正确带到 3.119.2，**唯独 Linux 那个停在 2.88.9**——所以这个坑在 Windows
+上永远不会暴露，是纯粹的移植期陷阱。
+
+```bash
+dotnet list src/Zhuoying/Zhuoying.csproj package --include-transitive | grep -i skia
+```
+
+**解决方案**：在 csproj 里对非 Windows 目标显式钉死 native 包版本，
+与托管 SkiaSharp 对齐：
+
+```xml
+<ItemGroup Condition="'$(ZyWindows)' != 'true'">
+  <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.2" />
+</ItemGroup>
+```
+
+**同类风险**：`HarfBuzzSharp.NativeAssets.Linux`（本项目实测 8.3.1.3 与托管端
+一致，无需干预）。日后升级 Avalonia 或 Svg.Skia 后应重新核对这两行依赖树。
+
+## 15. Xvfb 里设的测试图案抓出来是全黑（不是抓屏代码的锅）
+
+**现象**：在 Xvfb 上用 `magick display -window root pattern.png` 或
+`xsetroot -solid '#FF0000'` 铺好测试图案，应用的 X11 抓屏读回来却全是黑色，
+一度以为 `XGetImage` 实现有 bug。
+
+**根因**：这两个命令设置的是 root window 的**背景 pixmap**，而 pixmap 属于
+设置它的那个客户端；命令进程一退出，X server 就按默认的 close-down mode
+释放掉它，root 背景随即变回黑色。用 ctypes 直接调 `XGetImage` 复现出
+同样的全黑，证明 Xlib 侧行为一致——问题在测试夹具，不在被测代码。
+
+**解决方案**：测试内容改用**常驻的真实 X 窗口**（`xlogo -geometry
+400x300+200+150 -bg blue -fg white &` 之类），窗口只要不关就一直在。
+以此为基准，应用抓屏与 `ffmpeg -f x11grab` 抓同一区域**逐字节一致**
+（400×300 = 120000 像素零差异），抓屏管线随即确认无误。
+
+**排查陷阱**：定位时务必**同一时刻**跑对照组。早期一次对比里 ffmpeg 抓到红色
+而应用抓到黑色，看着像应用的 bug，实际只是 ffmpeg 那次跑在
+`magick display` 尚未退出的窗口期内——两次抓取隔了几秒，夹具状态已经变了。
+
+## 16. GIF 的 LZW 码宽提前一个码切换，整帧数据流损坏（平台无关，Windows 同样中招）
+
+**现象**：录出的 GIF 用 ffmpeg 解码报 `LZW decode failed`，Pillow 直接拒绝
+（`broken data stream when reading image file`，只读得出第一帧）。但**看起来是好的**——
+ffmpeg 和浏览器对 LZW 错误容错，照样把画面显示出来，`magick identify`
+也能报出正确的帧数与帧差分矩形。Linux 移植期做逐帧像素校验才暴露出来。
+
+**定位**：手写一个 GIF LZW 解码器逐码走，报告
+「第 257 码读到码值 1002，而字典下一个可用码是 512」。第 257 码正是码宽
+9→10 位的切换点。用同一个解码器去解 ImageMagick 生成的参考 GIF 则完全正常
+（60000/60000 像素、正常 EOI），证明问题在编码器不在解码器。
+
+**根因**：升位时机差一个码。编码器每输出一个码就建一条新表项，而解码器读到的
+**第一个数据码建不了表项**（还没有前缀可拼），此后解码器的表恒比编码器少一条。
+原代码按 `nextCode == 1 << codeSize` 升位，与解码器"同步"只是看起来同步——
+
+- 编码器：输出第 N 个数据码后 `nextCode = 258 + N`，`== 512` 时 N=254，第 255 码起用 10 位；
+- 解码器：读完第 N 个数据码后 `next = 257 + N`，`== 512` 时 N=255，第 256 码起才用 10 位。
+
+编码器提前一个码切到新位宽，从此整条码流比特错位，解出天文数字的非法码。
+
+**解决方案**：编码器的升位条件晚一个码：
+
+```csharp
+if (nextCode == (1 << codeSize) + 1 && codeSize < 12)
+    codeSize++;
+```
+
+三档升位点（513 / 1025 / 2049）正好对上解码器的 512 / 1024 / 2048。
+修复后 ffmpeg 零错误、Pillow 读全部帧，压缩率不受影响（29006 → 29005 字节）。
+
+**为什么一直没被发现**：帧间差分让**除首帧外的每一帧都很小**（本项目实测差分帧
+只有 60×40、约 70 个码），根本到不了 512 这个升位点，一路正常；只有数据量大的
+整帧（首帧、或画面大改动时）才会踩中。加上主流播放器容错，肉眼完全看不出来。
+
+**验证方法**：别只看"能不能播"。`ffmpeg -v error -i x.gif -f null -` 有任何输出即为损坏；
+Pillow 逐帧 `seek` 是最严格的判据。
+
+## 17. Wayland 抓屏首帧要等十几秒到一分钟（PipeWire + GStreamer 三连坑）
+
+**现象**：portal ScreenCast 会话建好了、gst 管道也起来了，但读第一帧要 15 秒起步，
+屏幕完全静止时能等到 57 秒。图像内容本身是对的，纯粹是慢。
+
+**根因有三层，逐层剥开**：
+
+1. **`fdsink` 默认 `sync=true`**（决定性）。`GstBaseSink` 会按 buffer 的时间戳
+   等到"该播放的时刻"才把数据吐给下游。这对播放器是对的，对抓屏是灾难。
+   管道末端加 `sync=false` 后首帧从 15700ms 降到 **50ms**。
+2. **不能丢首帧**。§12 的 Windows DDA 教训是"首帧可能未播种、必须丢弃重取"，
+   在 PipeWire 上**正好相反**：合成器在流建立时就推一帧当前内容，
+   此后**只在画面变化时才推新帧**。静止桌面上多要一帧就是无限期干等。
+   同一个直觉在两个平台上要反着用。
+3. **`Process.Kill(entireProcessTree: true)` 在 Linux 上很慢**。它要扫 `/proc`
+   重建整棵进程树，实测耗时抖动到 2 秒。子进程不 fork 时用无参 `Kill()`。
+   另外别对一次性管道先 `WaitForExit` 等优雅退出——gst-launch 收到 stdin 关闭后
+   要走完整套 EOS 流程，白等满超时。
+
+**结果**：单次抓屏 2.4s → **0.30s**，且不再有抖动。
+
+**排查提醒**：先加分段计时再动手优化。这个问题最初被判断成"portal 会话协商慢"，
+准备去做"启动即预热会话"——一测才发现协商只占 33ms，预热一分钱省不下来，
+全部开销在别处。
