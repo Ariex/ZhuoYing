@@ -1,29 +1,37 @@
 # 捉影（Zhuoying）
 
-Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原位标注 → 输出（剪贴板 / 文件 / 贴图）。
-交互体验对标 Snipaste / 微信截图。当前处于早期开发阶段。
+跨平台桌面截屏标注工具（Windows / Linux）：全局热键呼出 → 框选区域 → 原位标注 →
+输出（剪贴板 / 文件 / 贴图 / GIF / MP4 录屏）。交互体验对标 Snipaste / 微信截图。
+当前版本 **0.19**，需求 v1 主体功能已全部落地（仅"聚光灯"暂缓）；
+Linux 支持 X11 与 Wayland 两种会话（见 [docs/LINUX-PORT.md](docs/LINUX-PORT.md)）。
 
-## 功能现状（阶段一、二已完成）
+## 功能一览
 
 - **全局热键截屏**：默认 `Ctrl+1`（可在设置中改键），触发瞬间冻结**整个虚拟屏幕**；
-  抓屏走 DXGI Desktop Duplication（独占全屏游戏 / 视频硬件叠加层 / HDR 桌面
-  均正确），远程桌面等场景自动按显示器回退 GDI BitBlt
+  Windows 抓屏走 DXGI Desktop Duplication（独占全屏游戏 / 视频硬件叠加层 / HDR 桌面
+  均正确），远程桌面等场景自动按显示器回退 GDI BitBlt；Linux 按会话类型分流——
+  X11 走 XGetImage，Wayland 走 xdg-desktop-portal ScreenCast + PipeWire（首次授权
+  一次后静默）
 - **跨屏抓取**：所有显示器同时进入截屏态，默认选区为鼠标所在屏全屏；
   选区可跨显示器拖拽新建、移动、8 手柄调整，混合缩放（如 200% + 150%）下
   按物理像素拼接，像素级准确
 - **拖拽框选**：实时显示物理像素尺寸；选区外按下即扩展选区到该点
 - **窗口吸附**：截屏开始后移动鼠标自动高亮所指窗口（绿色框），点击即选中
-  该窗口区域；拖动则照常手动框选
+  该窗口区域；拖动则照常手动框选（Wayland 合成器不暴露窗口列表，此功能在
+  Wayland 下自动降级为纯手动框选）
 - **右键重新开始**：已框选/已标注时右键 = 整体重置重新捕捉（微信截图式），
   初始状态再右键才退出
 - **复制到剪贴板**：选区右下角工具条按钮 / `Enter` / `Ctrl+C` / 双击选区；
-  输出为 100% 物理分辨率的 CF_DIB（携带来源屏幕 DPI），高分屏粘贴不缩小、不模糊
+  输出为 100% 物理分辨率并携带来源屏幕 DPI（Windows 写 CF_DIB，Linux 写
+  PNG + pHYs），高分屏粘贴不缩小、不模糊
 - **保存 / 另存为**：`Ctrl+S` 自动存 PNG 到设定目录（默认 `图片\捉影`，
   设置可改）；`Ctrl+Shift+S` 弹出对话框自选目录与文件名；PNG 携带来源 DPI
 - **录制 GIF / MP4**（`F4` GIF / `F5` MP4，或工具条 ⏺ / 🎬）：框选区域后
-  活屏录制（24fps、含光标），红框与控制条不入镜，完成存到设定目录；
+  活屏录制（24fps、含光标），红框与控制条不入镜（Linux 无排除入镜能力，
+  红框改贴区域外沿、控制条只停区域外），完成存到设定目录；
   GIF 手写流式编码（相同画面合并时长、内存与时长无关）随处可贴自动循环，
-  MP4 走系统 H.264（优先硬编）全彩且体积小一个数量级、适合长录制
+  MP4 全彩且体积小一个数量级、适合长录制（Windows 走 Media Foundation
+  H.264 优先硬编，Linux 走 ffmpeg）
 - **贴图到屏幕**（`F3`）：选区连同标注钉成置顶小窗（原位、像素 1:1）；
   拖动移动、滚轮缩放、Ctrl+滚轮调透明度、双击/中键关闭，右键菜单可复制/
   另存/关闭全部；多张贴图共存无上限
@@ -45,7 +53,8 @@ Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原�
 - **标注：画笔**（P）：自由描线（圆头圆拐角、连续绘制）；颜色 / 粗细 /
   **荧光**开关——荧光笔与底图正片叠底，划过黑字字仍是黑的、白底变色
 - **标注：图章**（I）：素材图片（SVG/PNG）点击贴入截图，内置 ✓✗⭐⚠❤→ 六个
-  素材、可导入自定义（`%AppData%\Zhuoying\stamps\` 目录即库）；SVG 任意缩放
+  素材、可导入自定义（`%AppData%\Zhuoying\stamps\` 目录即库，Linux 为
+  `~/.config/Zhuoying/stamps/`）；SVG 任意缩放
   不糊；透明度 + 沿轮廓描边（非矩形框）；透明区点击穿透
 - **标注：橡皮**（E）：只擦画笔/荧光笔笔迹（其余标注与底图不受影响），
   拖拽涂抹实时生效，仅撤销可恢复；画笔/橡皮为实时圆形光标（直径=粗细）
@@ -55,13 +64,21 @@ Windows 桌面截屏标注工具：全局热键呼出 → 框选区域 → 原�
   空间不足自动换边
 - **托盘驻留**：无主窗口，托盘菜单提供 截屏 / 设置 / 退出；单实例运行
 - **设置**：截屏快捷键、保存目录、开机自启、标注预设颜色（持久化到
-  `%AppData%\Zhuoying\settings.json`）；各工具上次使用的样式自动记忆并落盘
-  （`presets.json`，重启保持）；保存成败与热键冲突有右下角气泡提示
+  `%AppData%\Zhuoying\settings.json`，Linux 为 `~/.config/Zhuoying/`）；
+  各工具上次使用的样式自动记忆并落盘（`presets.json`，重启保持）；
+  保存成败与热键冲突有右下角气泡提示
 - **DPI**：Per-Monitor DPI Aware v2，混合缩放多屏为一级支持场景
 
-后续规划见 [DEVPLAN.md](DEVPLAN.md)：下一步是标注编辑器其余工具
-（画笔/马赛克/橡皮/图章），之后是保存文件与贴图窗口等，
-完整需求见 [REQUIREMENTS.md](REQUIREMENTS.md) 与 [TOOLS-SPEC.md](TOOLS-SPEC.md)。
+需求 v1 的完整范围见 [REQUIREMENTS.md](REQUIREMENTS.md) 与
+[TOOLS-SPEC.md](TOOLS-SPEC.md)，逐阶段实现记录见 [DEVPLAN.md](DEVPLAN.md)。
+
+## 已知限制
+
+- **Wayland 抓屏目前只取一路流（单屏）**：portal ScreenCast 以 `multiple:false`
+  建会话，多屏需改多流合并——开发环境为单屏，无条件验证，暂不支持
+  （X11 与 Windows 的多屏 / 混合 DPI 均完整支持）
+- 聚光灯工具暂缓（采样取反基建已具备）
+- X11 的窗口吸附依赖 EWMH 窗口枚举，未在带窗口管理器的真实桌面验证过
 
 ## Agent API（AI Agent 获取屏幕信息）
 
@@ -100,11 +117,15 @@ Zhuoying.exe --api-capture "100,100,800,600" --out shot.png   # 区域截图（�
 
 ## 技术栈
 
-- [Avalonia](https://avaloniaui.net/) 11.3 + .NET 10（仅 Windows，Win10 1903+ / Win11）
-- 平台能力（抓屏 / 全局热键 / 剪贴板 / 显示器信息）收敛在 `Platform/` 接口层，
-  Windows 后端以 P/Invoke 实现（DXGI Desktop Duplication + GDI BitBlt 回退、
-  RegisterHotKey、Win32 剪贴板），DXGI/D3D11 的 COM 调用为手写 vtable 函数
-  指针（NativeAOT 兼容），为未来跨平台预留接口
+- [Avalonia](https://avaloniaui.net/) 11.3 + .NET 10；全项目 NativeAOT 兼容（硬约束）
+- 支持平台：Windows（Win10 1903+ / Win11）与 Linux（X11 + Wayland，
+  同一份构建按会话类型自动分流）
+- 平台能力（抓屏 / 全局热键 / 剪贴板 / 录屏帧源 / 视频编码等）收敛在 `Platform/`
+  接口层，经 `PlatformServices` 统一取用；`Platform/Windows` 与 `Platform/Linux`
+  在 csproj 里互斥编译。Windows 后端以 P/Invoke 实现（DXGI Desktop Duplication +
+  GDI BitBlt 回退、RegisterHotKey、Win32 剪贴板、Media Foundation），DXGI/MF 的
+  COM 调用为手写 vtable 函数指针；Linux 后端为手写 Xlib / GDBus 互操作
+  （portal ScreenCast、GlobalShortcuts）+ PipeWire / ffmpeg 子进程
 
 ## 构建与运行
 
@@ -182,12 +203,16 @@ Linux AOT 前置：`clang` + `zlib1g-dev`。
 
 ```
 src/Zhuoying/
-  Platform/            平台抽象接口（IHotkeyService / IScreenCapture / IClipboardImage）
-  Platform/Windows/    Windows P/Invoke 实现
-  Capture/             截屏会话：控制器、遮罩窗口、选区/标注/编辑器分层、工具栏
+  Platform/            平台抽象接口 + PlatformServices（实现的唯一取用口）
+  Platform/Windows/    Windows 实现（P/Invoke、手写 DXGI/MF vtable）
+  Platform/Linux/      Linux 实现（X11 与 Wayland 双后端 + 共用部分）
+  Capture/             截屏会话：控制器、遮罩窗口、选区/标注/编辑器分层、
+                       工具栏、录屏、钉屏贴图
   Annotations/         标注模型：元素、样式、线形表、命令式撤销/重做
+  Agent/               Agent API：--api-* CLI、MCP 协议层与内置 HTTP 服务
   Settings/            配置模型、持久化、设置窗口
 docs/TROUBLESHOOTING.md  疑难问题根因记录（DPI / 剪贴板等）
+docs/LINUX-PORT.md       Linux 移植的环境、设计取舍与逐项验证记录
 ```
 
 ## 已知问题与经验
